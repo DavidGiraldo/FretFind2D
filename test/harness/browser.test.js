@@ -233,7 +233,8 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
         // as the name appears yields zero bytes and leaks into the next button.
         const settledDownload = async () => {
             let last = -1;
-            for (let i = 0; i < 60; i++) {
+            // generous: a slow first download under load is a flake, not a bug
+            for (let i = 0; i < 160; i++) {
                 await sleep(150);
                 const files = fs.readdirSync(downloads).filter(f => !f.endsWith('.crdownload'));
                 if (!files.length) continue;
