@@ -217,7 +217,18 @@ async function openBrowser({ port, cdpPort }) {
     }
 
     // Records uncaught errors so "did the page blow up?" is a real assertion.
-    const TRAP = 'window.__errs=[];addEventListener("error",e=>window.__errs.push(String(e.message)));';
+    // Registered once: the binding survives navigation, and re-adding it on every
+    // load made a single error show up once per load performed so far.
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+        source: 'window.__errs=[];addEventListener("error",e=>window.__errs.push(String(e.message)));',
+    });
+
+    // The app has finished when it has drawn a table or reported why it cannot.
+    // Testing `$('#tables').html().length > 0` does NOT work: the markup ships
+    // with a `<!-- -->` placeholder inside #tables, so that is already true
+    // before anything renders and load() would not wait at all.
+    const RENDERED = "document.readyState==='complete' && !!window.ff && " +
+        "($('#tables').find('table').length>0 || $('#errors').css('display')==='block')";
 
     // Always goes via about:blank first: navigating between two urls that differ
     // only by fragment is a same-document navigation, so the page would keep its
@@ -225,9 +236,8 @@ async function openBrowser({ port, cdpPort }) {
     async function load(url, ready) {
         await send('Page.navigate', { url: 'about:blank' });
         await sleep(120);
-        await send('Page.addScriptToEvaluateOnNewDocument', { source: TRAP });
         await send('Page.navigate', { url });
-        const readyExpr = ready || "document.readyState==='complete' && !!window.ff && $('#tables').html().length>0";
+        const readyExpr = ready || RENDERED;
         for (let i = 0; i < 120; i++) {
             await sleep(100);
             try { if (await evaluate(readyExpr) === true) return; } catch { /* context swapping */ }

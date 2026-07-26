@@ -346,7 +346,14 @@ var getLink = function() {
     var params = {};
     $('#worksheet').find('input[id], textarea[id]').each(function(index,item){
         var id = $(item).attr('id');
-        params[id] = $(item).val();
+        if (item.type === 'checkbox') {
+            //val() on a checkbox is its value attribute -- "on" whether it is
+            //ticked or not -- so serializing that made every display option
+            //identical in the link and silently lost the author's choices
+            params[id] = item.checked ? '1' : '0';
+        } else {
+            params[id] = $(item).val();
+        }
     });
     params.t = ff.getTuning('tuning');
     params.il = getLengths('ilengths');
@@ -403,6 +410,20 @@ var showErrors = function(messages) {
     box.html(items.join('')).css('display','block');
 };
 
+// Same guard onChange applies, for the download buttons. They used to build a
+// file out of whatever the form held: the text writers emitted NaN-filled files,
+// and since jsPDF 3 throws on a non-finite coordinate the PDF buttons died with
+// no file and no message at all.
+var frettedGuitarForDownload = function() {
+    var guitar = getGuitar();
+    var problems = guitar.scale.errorstrings.concat(validateGuitar(guitar));
+    if (problems.length > 0) {
+        showErrors(problems);
+        return null;
+    }
+    return ff.fretGuitar(guitar);
+};
+
 var processChanges = false;
 var onChange = function() {
     if (processChanges) {
@@ -419,15 +440,29 @@ var onChange = function() {
     }
 };
 
-// select an alternative tab by its element id.
-// getElementById is used deliberately instead of $('#'+id): the id comes from the
-// url fragment. jQuery before 1.9 treated a selector string containing a tag as
-// html to build, so $('#'+id) with a crafted id executed script. 3.x rejects it,
-// but building a selector from untrusted text stays a bad habit worth not having.
-var clickAlt = function(id) {
-    var element = typeof id === 'string' ? document.getElementById(id) : null;
-    if (element) {
-        $(element).click();
+// Select an alternative tab, searching only inside its own group.
+//
+// The tab ids are not unique -- "equal" is both a string spacing mode and an
+// overhang mode -- so a document-wide lookup finds whichever comes first in the
+// markup. That made restoring any permalink whose overhang was "equal" click the
+// spacing group's tab instead, silently resetting proportional spacing.
+// The ids cannot be renamed without breaking every link ever written.
+//
+// The group id is a literal from the call site; only `id` comes from the url
+// fragment, and it is compared against existing elements rather than used to
+// build a selector. jQuery before 1.9 treated a selector string containing a tag
+// as html to build, so $('#'+id) with a crafted id executed script; 3.x rejects
+// it, but building a selector from untrusted text stays a bad habit.
+var clickAlt = function(groupId, id) {
+    if (typeof id !== 'string' || id === '') { return; }
+    var group = document.getElementById(groupId);
+    if (!group) { return; }
+    var tabs = group.getElementsByTagName('dt');
+    for (var i=0; i<tabs.length; i++) {
+        if (tabs[i].id === id) {
+            $(tabs[i]).click();
+            return;
+        }
     }
 };
 
@@ -444,17 +479,27 @@ var updateFormFromHash = function() {
         //`in`, not hasOwnProperty: deparamFragment returns a null-prototype
         //object, which has no methods to call
         if (id in params){
-            $(item).val(params[id]);
+            if (item.type === 'checkbox') {
+                //only 0/1 is meaningful. links written before the display
+                //options were serialized properly carry "on" for all five
+                //regardless of state, so those are ignored rather than obeyed,
+                //which would switch on options the author never selected.
+                if (params[id] === '0' || params[id] === '1') {
+                    $(item).prop('checked', params[id] === '1');
+                }
+            } else {
+                $(item).val(params[id]);
+            }
         }
     });
     setLengths('ilengths','numStrings', onChange, (params['il'] || []));
     setGauges('igauges', 'numStrings', onChange, (params['ig'] || []));
     ff.setTuning('tuning','numStrings', onChange, (params['t'] || []));
     $("input[name='units']").filter("[value='"+currentUnits+"']").click();
-    clickAlt(params.sl);
-    clickAlt(params.ns);
-    clickAlt(params.scale);
-    clickAlt(params.o);
+    clickAlt('length', params.sl);
+    clickAlt('spacing', params.ns);
+    clickAlt('scale', params.scale);
+    clickAlt('overhang', params.o);
 };
 
 $(document).ready(function() {
@@ -498,8 +543,8 @@ $(document).ready(function() {
         
         dl.append('<dt>DXF</dt><dd><button id="download_dxf">Download</button></dd>');
         $('#download_dxf').click(function(){
-            var guitar = getGuitar();
-            guitar = ff.fretGuitar(guitar);
+            var guitar = frettedGuitarForDownload();
+            if (!guitar) { return; }
             var blob = new Blob([ff.getDXF(guitar, getDisplayOptions())], {type: "image/vnd.dxf"});
             saveAs(blob, "fretboard.dxf");
         });
@@ -512,9 +557,9 @@ $(document).ready(function() {
             '</dd>' +
             '<dd><button id="download_pdfm">Download</button></dd>');
         $('#download_pdfm').click(function(){
-            var guitar = getGuitar();
+            var guitar = frettedGuitarForDownload();
+            if (!guitar) { return; }
             var pagesize = $("input:checked[name='pdfm_pagesize']").val();
-            guitar = ff.fretGuitar(guitar);
             //already a Blob: jsPDF writes binary content, and re-wrapping its
             //output as a string would re-encode it as UTF-8 and corrupt the file
             saveAs(ff.getPDFMultipage(guitar, getDisplayOptions(), pagesize), "fretboard.pdf");
@@ -522,39 +567,39 @@ $(document).ready(function() {
         
         dl.append('<dt>PDF (single page)</dt><dd><button id="download_pdf">Download</button></dd>');
         $('#download_pdf').click(function(){
-            var guitar = getGuitar();
-            guitar = ff.fretGuitar(guitar);
+            var guitar = frettedGuitarForDownload();
+            if (!guitar) { return; }
             saveAs(ff.getPDF(guitar, getDisplayOptions()), "fretboard.pdf");
         });
         
         dl.append('<dt>SVG</dt><dd><button id="download_svg">Download</button></dd>');
         $('#download_svg').click(function(){
-            var guitar = getGuitar();
-            guitar = ff.fretGuitar(guitar);
+            var guitar = frettedGuitarForDownload();
+            if (!guitar) { return; }
             var blob = new Blob([ff.getSVG(guitar, getDisplayOptions())], {type: "image/svg+xml"});
             saveAs(blob, "fretboard.svg");
         });
         
         dl.append('<dt>CSV</dt><dd><button id="download_csv">Download</button></dd>');
         $('#download_csv').click(function(){
-            var guitar = getGuitar();
-            guitar = ff.fretGuitar(guitar);
+            var guitar = frettedGuitarForDownload();
+            if (!guitar) { return; }
             var blob = new Blob([ff.getCSV(guitar)], {type: "text/csv"});
             saveAs(blob, "fretboard.csv");
         });
         
         dl.append('<dt>HTML</dt><dd><button id="download_html">Download</button></dd>');
         $('#download_html').click(function(){
-            var guitar = getGuitar();
-            guitar = ff.fretGuitar(guitar);
+            var guitar = frettedGuitarForDownload();
+            if (!guitar) { return; }
             var blob = new Blob([ff.getHTML(guitar)], {type: "text/html"});
             saveAs(blob, "fretboard.html");
         });
         
         dl.append('<dt>TAB</dt><dd><button id="download_tab">Download</button></dd>');
         $('#download_tab').click(function(){
-            var guitar = getGuitar();
-            guitar = ff.fretGuitar(guitar);
+            var guitar = frettedGuitarForDownload();
+            if (!guitar) { return; }
             var blob = new Blob([ff.getTAB(guitar)], {type: "text/tab-separated-values"});
             saveAs(blob, "fretboard.tab");
         });

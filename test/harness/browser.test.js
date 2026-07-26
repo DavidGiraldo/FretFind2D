@@ -69,7 +69,10 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
         r.check('string gauges convert', await b.evaluate("getGauges('igauges').join(',')") === '0.254,0.3302,0.4318,0.6604,0.9144,1.1684',
             await b.evaluate("getGauges('igauges').join(',')"));
         await b.evaluate("$('#individual').click();$('#numStrings').val('7').change();");
-        r.check('regenerated per-string defaults follow the unit', await b.evaluate("getLengths('ilengths')[0]") === 635,
+        // the LAST entry is the newly generated one; index 0 is a pre-existing
+        // value that was already converted, so it passes either way
+        r.check('regenerated per-string defaults follow the unit',
+            await b.evaluate("getLengths('ilengths')[6]") === 711.2,
             await b.evaluate("JSON.stringify(getLengths('ilengths'))"));
 
         // ------------------------------------------------------------ the help links
@@ -105,6 +108,48 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
         await b.load(b.appUrl('#t[]=0&t[]=7&t[]=3&t[]=10&t[]=5&t[]=0&numStrings=6'));
         r.check('the tuning array restores from the fragment', await b.evaluate("ff.getTuning('tuning').join(',')") === '0,7,3,10,5,0',
             await b.evaluate("ff.getTuning('tuning').join(',')"));
+
+        // display checkboxes: .val() on a checkbox is "on" whether ticked or not,
+        // so serializing that made every link identical and lost the choices
+        await b.load(b.appUrl());
+        await b.evaluate("document.getElementById('showStrings').click();document.getElementById('showBoundingBox').click()");
+        const optsBefore = await b.evaluate('JSON.stringify(getDisplayOptions())');
+        const optsLink = await b.evaluate("$('#bookmark').attr('href')");
+        r.check('toggling a display option changes the link', optsLink.indexOf('showStrings=0') > -1 && optsLink.indexOf('showBoundingBox=1') > -1,
+            (/showStrings=[^&]*/.exec(optsLink) || []) + ' ' + (/showBoundingBox=[^&]*/.exec(optsLink) || []));
+        await b.load(optsLink);
+        r.check('display options survive the permalink', await b.evaluate('JSON.stringify(getDisplayOptions())') === optsBefore,
+            await b.evaluate('JSON.stringify(getDisplayOptions())'));
+        // links written before that fix carry "on" for all five regardless of
+        // state; obeying them would switch on options the author never chose
+        await b.load(b.appUrl('#showStrings=on&showBoundingBox=on&extendFrets=on'));
+        r.check('a legacy "on" checkbox value is ignored, not obeyed', await b.evaluate(
+            "(function(){var o=getDisplayOptions();return o.showStrings===true&&o.showBoundingBox===false&&o.extendFrets===false;})()"),
+            await b.evaluate('JSON.stringify(getDisplayOptions())'));
+
+        // the alternative tab ids are not unique: "equal" is both a spacing mode
+        // and an overhang mode, so a document-wide lookup hit the wrong group
+        await b.load(b.appUrl());
+        await b.evaluate("$('#proportional').click()");
+        const altLink = await b.evaluate("$('#bookmark').attr('href')");
+        await b.load(altLink);
+        r.check('proportional spacing survives a permalink whose overhang is "equal"',
+            await b.evaluate("ff.getAlt('spacing')") === 'proportional' && await b.evaluate("ff.getAlt('overhang')") === 'equal',
+            await b.evaluate("ff.getAlt('spacing')+'/'+ff.getAlt('overhang')"));
+        // and every alternative group round-trips together
+        await b.load(b.appUrl());
+        await b.evaluate("$('#multiple').click();$('#proportional').click();$('#scala').click();$('#firstlast').click()");
+        const allAlts = await b.evaluate("$('#bookmark').attr('href')");
+        await b.load(allAlts);
+        r.check('all four alternative groups round-trip', await b.evaluate(
+            "['length','spacing','scale','overhang'].map(function(g){return ff.getAlt(g);}).join(',')") === 'multiple,proportional,scala,firstlast',
+            await b.evaluate("['length','spacing','scale','overhang'].map(function(g){return ff.getAlt(g);}).join(',')"));
+
+        // jQuery 1.x's $.param wrote spaces as +, 3.x writes %20. Old links must
+        // still decode: #scl is the only field that can hold a space.
+        await b.load(b.appUrl('#scale=scala&scl=' + encodeURIComponent('! t.scl\nmy scale here\n1\n2/1').replace(/%20/g, '+')));
+        r.check('a legacy +-encoded space still decodes', String(await b.evaluate("$('#scl').val()")).indexOf('my scale here') > -1,
+            JSON.stringify(await b.evaluate("$('#scl').val()")));
 
         await b.load(b.appUrl('#u=furlong&len=24.75&nutWidth=1.375'));
         r.check('an unknown unit falls back to inches', await b.evaluate("$(\"input:checked[name='units']\").val()") === 'in');
@@ -251,6 +296,17 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
             Math.abs(boxes.in[2] - boxes.mm[2]) < 0.01 && Math.abs(boxes.in[3] - boxes.cm[3]) < 0.01,
             JSON.stringify(boxes));
 
+        // jsPDF 3 reorders format to match orientation -- portrait forces
+        // height >= width -- so a design wider than it is long used to come out
+        // rotated, with the drawing running off the edge of the paper
+        await b.load(b.appUrl());
+        await b.evaluate("$('#len').val('2');$('#nutWidth').val('10');$('#bridgeWidth').val('12');$('#len').change();");
+        const wide = await readPdf('ff.getPDF(g, getDisplayOptions())');
+        // 12.1875 + 1 wide by 2 + 1 long, at 72 points per unit
+        r.check('a design wider than it is long keeps its page orientation',
+            Math.abs(wide.box[2] - 949.5) < 0.01 && Math.abs(wide.box[3] - 216) < 0.01, wide.box.join(' '));
+
+        await b.load(b.appUrl());
         const multi = await readPdf("ff.getPDFMultipage(g, getDisplayOptions(), 'letter')");
         r.check('multipage uses real letter pages (612 x 792 points)',
             Math.abs(multi.box[2] - 612) < 0.01 && Math.abs(multi.box[3] - 792) < 0.01, multi.box.join(' '));
@@ -275,6 +331,19 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
             ['download_pdf', 'fretboard.pdf', '%PDF-'],
             ['download_pdfm', 'fretboard.pdf', '%PDF-'],
         ];
+        // an invalid form must not produce a file: the text writers used to emit
+        // NaN-filled ones, and jsPDF 3 throws, so the PDF buttons died silently
+        await b.load(b.appUrl('#root=0'));
+        for (const id of ['download_dxf', 'download_pdf', 'download_csv']) {
+            let outcome = 'no file';
+            try { outcome = 'wrote ' + await b.download(() => b.evaluate(`document.getElementById('${id}').click()`), 4000); }
+            catch (e) { outcome = e.message; }
+            r.check(`${id} refuses to write a file from invalid input`, outcome === 'download timed out', outcome);
+        }
+        r.check('and the error is shown instead', await b.evaluate("$('#errors').css('display')") === 'block');
+        r.check('no uncaught error from any download button', await noErrors(), await errs());
+
+        await b.load(b.appUrl());
         for (const [id, filename, magic] of buttons) {
             r.check(`${id} button exists`, await b.evaluate(`document.querySelectorAll('#${id}').length`) === 1);
             let saved = null;

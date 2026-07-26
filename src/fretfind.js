@@ -842,13 +842,22 @@ var ff = (function(){
             unitMult = 25.4;
         }
         var margin = 0.5 * unitMult;
+        var pageWidth = x.maxx + (2 * margin);
+        var pageHeight = x.maxy + (2 * margin);
         //jsPDF 3 is a UMD bundle exposing window.jspdf, and takes an options
         //object; it works natively in in/cm/mm so unitMult still only scales the
         //margin and the line width.
+        //
+        //The orientation has to match the format, because jsPDF 3 reorders the
+        //two to suit it: portrait forces height >= width, landscape the reverse.
+        //(The 2010 version only did this for landscape, so 'p' was always safe.)
+        //Naming the orientation the page already has makes that reordering a
+        //no-op; hardcoding 'p' silently rotated any design wider than it is long
+        //and ran the drawing off the edge of the paper.
         var doc = new jspdf.jsPDF({
-            orientation: 'p',
+            orientation: pageWidth > pageHeight ? 'l' : 'p',
             unit: guitar.units,
-            format: [x.maxx + (2 * margin), x.maxy + (2 * margin)]
+            format: [pageWidth, pageHeight]
         });
         var lineWidth = (1/72) * unitMult;
 
@@ -858,7 +867,7 @@ var ff = (function(){
 
         if(displayOptions.showMetas) {
             //Output center line
-            doc.line(guitar.center + margin, 0, guitar.center + margin, x.maxy + (2 * margin));
+            doc.line(guitar.center + margin, 0, guitar.center + margin, pageHeight);
         }
 
         if(displayOptions.showStrings) {
