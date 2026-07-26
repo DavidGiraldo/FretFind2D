@@ -206,8 +206,9 @@ async function openBrowser({ port, cdpPort }) {
     await send('Page.enable');
     await send('Runtime.enable');
 
+    // awaitPromise so an expression can read a Blob through FileReader
     async function evaluate(expression) {
-        const r = await send('Runtime.evaluate', { expression, returnByValue: true });
+        const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
         if (r.exceptionDetails) {
             const e = r.exceptionDetails.exception || {};
             return { __threw: String(e.description || e.value || 'unknown').split('\n')[0] };

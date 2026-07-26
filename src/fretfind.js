@@ -842,7 +842,14 @@ var ff = (function(){
             unitMult = 25.4;
         }
         var margin = 0.5 * unitMult;
-        var doc = jsPDF('P', guitar.units, [x.maxx + (2 * margin), x.maxy + (2 * margin)]);
+        //jsPDF 3 is a UMD bundle exposing window.jspdf, and takes an options
+        //object; it works natively in in/cm/mm so unitMult still only scales the
+        //margin and the line width.
+        var doc = new jspdf.jsPDF({
+            orientation: 'p',
+            unit: guitar.units,
+            format: [x.maxx + (2 * margin), x.maxy + (2 * margin)]
+        });
         var lineWidth = (1/72) * unitMult;
 
         var intersect = guitar.doPartials ? 0 : .02;
@@ -913,9 +920,11 @@ var ff = (function(){
             }
         }
 
-        return doc.output();
+        //a Blob, not a string: wrapping the old string output in new Blob([...])
+        //re-encoded it as UTF-8, corrupting any byte above 0x7F
+        return doc.output('blob');
     };
-    
+
     var getPDFMultipage = function(guitar, displayOptions, pagesize) {
         var x = getExtents(guitar);
         
@@ -934,7 +943,7 @@ var ff = (function(){
             var rawPageHeight = 11;
         }
         
-        var pdf = jsPDF('P', guitar.units, pagesize);
+        var pdf = new jspdf.jsPDF({orientation: 'p', unit: guitar.units, format: pagesize});
         
         var unitMult = 1;
         if (guitar.units === 'cm') {
@@ -1028,7 +1037,7 @@ var ff = (function(){
 
             }
         }
-        return pdf.output();
+        return pdf.output('blob');
     };
     
     // TODO: 

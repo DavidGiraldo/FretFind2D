@@ -25,9 +25,7 @@
 <script type="text/javascript" src="libs/jquery-3.7.1.min.js"><!-- --></script>
 <script type="text/javascript" src="libs/raphael-min.js"><!-- --></script>
 <script type="text/javascript" src="libs/FileSaver.min.js"><!-- --></script>
-<script type="text/javascript" src="libs/base64.js"><!-- --></script>
-<script type="text/javascript" src="libs/sprintf.js"><!-- --></script>
-<script type="text/javascript" src="libs/jspdf.js"><!-- --></script>
+<script type="text/javascript" src="libs/jspdf.umd.min.js"><!-- --></script>
 <script type="text/javascript" src="fretfind.js"><!-- --></script>
 <script type="text/javascript">
 //<![CDATA[
@@ -517,16 +515,16 @@ $(document).ready(function() {
             var guitar = getGuitar();
             var pagesize = $("input:checked[name='pdfm_pagesize']").val();
             guitar = ff.fretGuitar(guitar);
-            var blob = new Blob([ff.getPDFMultipage(guitar, getDisplayOptions(), pagesize)], {type: "application/pdf"});
-            saveAs(blob, "fretboard.pdf");
+            //already a Blob: jsPDF writes binary content, and re-wrapping its
+            //output as a string would re-encode it as UTF-8 and corrupt the file
+            saveAs(ff.getPDFMultipage(guitar, getDisplayOptions(), pagesize), "fretboard.pdf");
         });
         
         dl.append('<dt>PDF (single page)</dt><dd><button id="download_pdf">Download</button></dd>');
         $('#download_pdf').click(function(){
             var guitar = getGuitar();
             guitar = ff.fretGuitar(guitar);
-            var blob = new Blob([ff.getPDF(guitar, getDisplayOptions())], {type: "application/pdf"});
-            saveAs(blob, "fretboard.pdf");
+            saveAs(ff.getPDF(guitar, getDisplayOptions()), "fretboard.pdf");
         });
         
         dl.append('<dt>SVG</dt><dd><button id="download_svg">Download</button></dd>');

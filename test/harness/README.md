@@ -62,7 +62,9 @@ drawing, the jsPDF writers, and it runs [../geom.html](../geom.html) too.
 
 ## What is not covered
 
-That a PDF *looks* right and prints to true physical scale. No automated check
-verifies it, and it is what matters most to someone using the tool to cut a
-real fretboard. Verify it by hand: export a known scale length in each of the
-three units, open the PDF, and measure it with print scaling disabled.
+That a PDF *looks* right. The page geometry is checked — the MediaBox must come
+out identical in inches, centimetres and millimetres, since a design is the same
+physical object however its numbers are written — but nothing verifies that the
+lines inside it are in the right places, and that is what matters to someone
+cutting a real fretboard. Verify it by hand: export a known scale length, open
+the PDF, and measure it with print scaling disabled.

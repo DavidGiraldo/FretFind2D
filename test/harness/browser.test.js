@@ -210,6 +210,53 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
             r.check(`${name} produces output in mm`, typeof size === 'number' && size > 100, size);
         }
 
+        // ------------------------------------------------------------------ pdf
+        //
+        // The point of the PDF output is printing at true physical size, so the
+        // assertion that matters is the page box. A design is the same physical
+        // object however its numbers are written, so the MediaBox must come out
+        // identical in inches, centimetres and millimetres.
+
+        const readPdf = (call) => b.evaluate(`(function(){
+            var g = ff.fretGuitar(getGuitar());
+            var blob = ${call};
+            return new Promise(function(resolve){
+                var reader = new FileReader();
+                reader.onload = function(){
+                    var text = reader.result;
+                    var box = (/MediaBox\\s*\\[([^\\]]*)\\]/.exec(text)||[])[1] || '';
+                    resolve({
+                        isBlob: blob instanceof Blob, type: blob.type, size: blob.size,
+                        box: box.trim().split(/\\s+/).map(parseFloat),
+                        pages: (text.match(/\\/Type\\s*\\/Page[^s]/g)||[]).length
+                    });
+                };
+                reader.readAsBinaryString(blob);
+            });
+        })()`);
+
+        const boxes = {};
+        for (const unit of ['in', 'cm', 'mm']) {
+            await b.load(b.appUrl());
+            await b.evaluate(`document.querySelector("input[name='units'][value='${unit}']").click()`);
+            const pdf = await readPdf('ff.getPDF(g, getDisplayOptions())');
+            boxes[unit] = pdf.box;
+            r.check(`${unit}: getPDF returns a pdf Blob`, pdf.isBlob && pdf.type === 'application/pdf', `${pdf.isBlob} ${pdf.type}`);
+            r.check(`${unit}: it is a single page`, pdf.pages === 1, pdf.pages);
+            // 3.3125 x 26 inches at 72 points per inch
+            r.check(`${unit}: page box is 238.5 x 1872 points`,
+                Math.abs(pdf.box[2] - 238.5) < 0.01 && Math.abs(pdf.box[3] - 1872) < 0.01, pdf.box.join(' '));
+        }
+        r.check('the printed size is identical in all three units',
+            Math.abs(boxes.in[2] - boxes.mm[2]) < 0.01 && Math.abs(boxes.in[3] - boxes.cm[3]) < 0.01,
+            JSON.stringify(boxes));
+
+        const multi = await readPdf("ff.getPDFMultipage(g, getDisplayOptions(), 'letter')");
+        r.check('multipage uses real letter pages (612 x 792 points)',
+            Math.abs(multi.box[2] - 612) < 0.01 && Math.abs(multi.box[3] - 792) < 0.01, multi.box.join(' '));
+        // 25in tall over a 10in printable height, 2.3125in wide over 7.5in
+        r.check('multipage tiles the design across three pages', multi.pages === 3, multi.pages);
+
         // ------------------------------------------------------------- downloads
         //
         // The one path with no other coverage: Blob construction, FileSaver, and
