@@ -33,6 +33,45 @@
 <script type="text/javascript">
 //<![CDATA[
 
+// the unit every measurement in the form is currently expressed in.
+// switching units rewrites all of those fields, so the previous unit must be tracked.
+var currentUnits = 'in';
+
+// every form field that holds a length. deliberately an allowlist: #worksheet also
+// holds ratios (pDist/ipDist), counts (numFrets/numStrings/root), tuning steps and
+// the scala file, none of which may ever be scaled.
+var LENGTH_IDS = ['len','lenF','lenL','nutWidth','bridgeWidth',
+                  'oE','oN','oB','oF','oL','oNF','oBF','oNL','oBL'];
+// per-string inputs are regenerated html without ids, so they are found by container
+var LENGTH_GROUPS = ['ilengths','igauges'];
+
+// rescale every length field. fields inside hidden alternatives are converted too,
+// otherwise switching scale length or overhang mode later would mix units.
+var convertLengthInputs = function(from, to) {
+    if (from === to) { return; }
+    var convert = function(_,item) {
+        var value = parseFloat($(item).val());
+        //leave blank or malformed fields alone instead of writing NaN into them
+        if (isFinite(value)) {
+            //val() does not fire change in jQuery 1.4.x; the single redraw comes
+            //from the units radio's own change handler
+            $(item).val(ff.convertLength(value, from, to));
+        }
+    };
+    var i;
+    for (i=0; i<LENGTH_IDS.length; i++) {
+        $('#'+LENGTH_IDS[i]).each(convert);
+    }
+    for (i=0; i<LENGTH_GROUPS.length; i++) {
+        $('#'+LENGTH_GROUPS[i]+' > input').each(convert);
+    }
+};
+
+// show the active unit beside every length field
+var updateUnitLabels = function(units) {
+    $('#worksheet span.unit').text(units);
+};
+
 var getLengths = function(id) {
     var lengths = [];
     $('#'+id+' > input').each(function(_,item){lengths.push(parseFloat(item.value));});
@@ -45,7 +84,13 @@ var setLengths = function(length_id, string_count_id, change_callback, lengths) 
     }
     var output = '';
     for (var i=0; i<strings; i++) {
-        output += 'string '+(i+1)+': <input type="text" value="'+(lengths[i] || 25+(i*.5))+'" /><br />';
+        //the default ladder is written in inches; state it in the active unit
+        var fallback = ff.convertLength(25+(i*.5), 'in', currentUnits);
+        //coerce: these values can come straight from the url fragment
+        var length = ff.safeNumber(lengths[i], 0);
+        if (length <= 0) { length = fallback; }
+        output += 'string '+(i+1)+': <input type="text" value="'+length+
+            '" /> <span class="unit">'+currentUnits+'</span><br />';
     }
     $('#'+length_id).html(output);
     $('#'+length_id+' > input').change(change_callback);
@@ -63,7 +108,11 @@ var setGauges = function(gauge_id, string_count_id, change_callback, gauges) {
     }
     var output = '';
     for (var i=0; i<strings; i++) {
-        output += 'string '+(i+1)+': <input type="text" value="'+(gauges[i] || 0.0)+'" /><br />';
+        //coerce: these values can come straight from the url fragment
+        var gauge = ff.safeNumber(gauges[i], 0);
+        if (gauge < 0) { gauge = 0; }
+        output += 'string '+(i+1)+': <input type="text" value="'+gauge+
+            '" /> <span class="unit">'+currentUnits+'</span><br />';
     }
     $('#'+gauge_id).html(output);
     $('#'+gauge_id+' > input').change(change_callback);
@@ -74,12 +123,18 @@ var setGauges = function(gauge_id, string_count_id, change_callback, gauges) {
 // the offsets along the nut. 
 var computeOffsets = function(strings, gauges, actual_length, perp_width, spacingMode) {
     var offsets = [0];
+    //with fewer than two strings there is no gap to divide, and the arithmetic
+    //below would either divide by zero or build an Array of length NaN
+    if (!isFinite(strings) || strings < 2) {
+        return offsets;
+    }
     const corrected_gauges = spacingMode === 'proportional' ? gauges : new Array(strings).fill(0);
-    const working_area = perp_width - corrected_gauges.reduce((tot, cur) => tot + cur); 
+    //an explicit seed: reduce() on an empty gauge list throws without one
+    const working_area = perp_width - corrected_gauges.reduce((tot, cur) => tot + cur, 0);
     const perp_gap = working_area / (strings - 1);
     for (var i=1; i<strings-1; i++) {
-        half_adjacent_strings = (corrected_gauges[i-1] + corrected_gauges[i]) / 2.0;
-        next_space = perp_gap + half_adjacent_strings; 
+        var half_adjacent_strings = (corrected_gauges[i-1] + corrected_gauges[i]) / 2.0;
+        var next_space = perp_gap + half_adjacent_strings;
         offsets.push(offsets[i-1] + next_space * actual_length / perp_width);
     }
     return offsets;
@@ -116,8 +171,11 @@ var getGuitar = function() {
     var perp = ff.getFlt('pDist');
     var nutWidth = ff.getFlt('nutWidth');
     var bridgeWidth = ff.getFlt('bridgeWidth');
-    var strings = ff.getInt('numStrings');
+    //a blank field reads back as NaN, which would build an Array of length NaN
+    //further down; clamp here and let validateGuitar report it to the user
+    var strings = Math.max(1, ff.safeNumber(ff.getInt('numStrings'), 1));
     var units = $("input:checked[name='units']").val();
+
 
     var gauges = getGauges('igauges');
     var lengths = getLengths('ilengths');
@@ -241,7 +299,14 @@ var getGuitar = function() {
     var nutOffsets = computeOffsets(strings, gauges, nut.length(), nutWidth, spacingMode);
     var bridgeOffsets = computeOffsets(strings, gauges, bridge.length(), bridgeWidth, spacingMode); 
     
-    var lines = [first];
+    //`first` and `last` are the outer pair, so a one-string instrument has no pair
+    //to span: centre the single string instead. the entered widths are deliberately
+    //left alone so the nut and bridge stay real segments -- zeroing them collapses
+    //them to a point, and pointAt() on a zero-length segment divides by zero and
+    //places the fretboard edges at NaN.
+    var lines = [strings < 2 ?
+        new ff.Segment(nut.pointAt(nut.length()/2), bridge.pointAt(bridge.length()/2)) :
+        first];
     for (var i=1; i<=(strings-2); i++)
     {
       var n = nut.pointAt(nutOffsets[i]);
@@ -262,7 +327,11 @@ var getGuitar = function() {
       }
       lines.push(new ff.Segment(n, b));
     }
-    lines.push(last);
+    //`first` and `last` are the same line when there is only one string, so
+    //pushing both would hand back two strings for a one-string instrument
+    if (strings > 1) {
+      lines.push(last);
+    }
 
     return {
         scale: scale,
@@ -297,19 +366,81 @@ var getLink = function() {
 //surface for drawing fretboard
 var paper;
 
+// Catches the inputs that produce impossible geometry. A blank or non-numeric field
+// arrives as NaN, and an individual scale length shorter than the distance its string
+// travels across the neck makes deltay the square root of a negative number.
+var validateGuitar = function(guitar) {
+    var problems = [];
+    if (guitar.strings.length < 1) {
+        problems.push('Error: at least one string is required.');
+    }
+    if (!isFinite(guitar.fret_count) || guitar.fret_count < 0) {
+        problems.push('Error: number of frets must be zero or more.');
+    }
+    var finite = function(point) { return isFinite(point.x) && isFinite(point.y); };
+    var segments = [guitar.edge1, guitar.edge2].concat(guitar.strings);
+    for (var i=0; i<segments.length; i++) {
+        if (!finite(segments[i].end1) || !finite(segments[i].end2)) {
+            problems.push('Error: these measurements do not describe a valid fretboard. ' +
+                'Check for blank or non-numeric fields, and make sure every scale length ' +
+                'is longer than the distance that string travels across the neck.');
+            break;
+        }
+    }
+    return problems;
+};
+
+// Scale collects parse errors that nothing used to read, so a bad tone count or a
+// malformed scala file silently produced a NaN fretboard. Show them instead.
+var showErrors = function(messages) {
+    var box = $('#errors');
+    if (messages.length === 0) {
+        box.html('').css('display','none');
+        return;
+    }
+    var items = [];
+    for (var i=0; i<messages.length; i++) {
+        //text() so a scala file cannot inject markup through an error message
+        items.push($('<div></div>').text(messages[i]).html());
+    }
+    box.html(items.join('')).css('display','block');
+};
+
 var processChanges = false;
 var onChange = function() {
     if (processChanges) {
         var guitar = getGuitar();
+        var problems = guitar.scale.errorstrings.concat(validateGuitar(guitar));
+        showErrors(problems);
+        //fretting NaN geometry yields a blank diagram and a table full of NaN,
+        //so report the problem and leave the last good drawing on screen
+        if (problems.length > 0) { return; }
         guitar = ff.fretGuitar(guitar);
         ff.drawGuitar(paper, guitar, getDisplayOptions());
-        $('#tables').html(ff.getTable(guitar));
+        $('#tables').html(ff.getTable(guitar, guitar.units));
         $('#bookmark').attr('href', getLink());
+    }
+};
+
+// select an alternative tab by its element id.
+// getElementById is used deliberately instead of $('#'+id): the id comes from the
+// url fragment, and jQuery 1.4.2 treats a selector string containing a tag as html
+// to build, so $('#'+id) with a crafted id executes script.
+var clickAlt = function(id) {
+    var element = typeof id === 'string' ? document.getElementById(id) : null;
+    if (element) {
+        $(element).click();
     }
 };
 
 var updateFormFromHash = function() {
     var params = $.deparam.fragment();
+    //the values in the link are already expressed in the link's unit, so adopt that
+    //unit before restoring anything. this is what stops the radio click below from
+    //converting values that are already correct.
+    //an unrecognized unit matches no radio, so fall back to the one that stays
+    //checked instead of tracking a unit no radio represents.
+    currentUnits = ff.isKnownUnit(params['u']) ? params['u'] : 'in';
     $('#worksheet').find('input[id], textarea[id]').each(function(index,item){
         var id = $(item).attr('id');
         if (params.hasOwnProperty(id)){
@@ -319,11 +450,11 @@ var updateFormFromHash = function() {
     setLengths('ilengths','numStrings', onChange, (params['il'] || []));
     setGauges('igauges', 'numStrings', onChange, (params['ig'] || []));
     ff.setTuning('tuning','numStrings', onChange, (params['t'] || []));
-    $("input[name='units']").filter("[value='"+(params['u']||'in')+"']").click();
-    $('#'+params.sl).click();
-    $('#'+params.ns).click();
-    $('#'+params.scale).click();
-    $('#'+params.o).click();
+    $("input[name='units']").filter("[value='"+currentUnits+"']").click();
+    clickAlt(params.sl);
+    clickAlt(params.ns);
+    clickAlt(params.scale);
+    clickAlt(params.o);
 };
 
 $(document).ready(function() {
@@ -334,6 +465,19 @@ $(document).ready(function() {
       setLengths('ilengths','numStrings', onChange);
       setGauges('igauges', 'numStrings', onChange);
     });
+    //registered before the blanket handler below so that the fields are already
+    //rescaled by the time onChange redraws. jQuery fires handlers in bind order,
+    //so reversing these two lines would redraw using the previous unit's values.
+    $("input[name='units']").change(function(){
+      var newUnits = $(this).val();
+      //skip while the form is being restored from the hash: those values are
+      //already in the link's unit and must not be converted again
+      if (processChanges) {
+        convertLengthInputs(currentUnits, newUnits);
+      }
+      currentUnits = newUnits;
+      updateUnitLabels(newUnits);
+    });
     $('#worksheet').find('input, textarea').change(onChange);
     ff.setTuning('tuning', 'numStrings', onChange);
     setLengths('ilengths','numStrings', onChange);
@@ -341,6 +485,7 @@ $(document).ready(function() {
     paper = Raphael('diagram',200,800);
     updateFormFromHash();
     processChanges = true;
+    updateUnitLabels(currentUnits);
     onChange();
 
     var isFileSaverSupported = false;
@@ -435,12 +580,29 @@ multiple scale lengths and non-parallel frets
 as well as fretboards for instruments that play just or meantone scales.
 </p>
 <div id="fretfind">
+    <!-- above the floated worksheet so the message is visible without scrolling -->
+    <div id="errors" style="display:none"><!-- --></div>
     <dl id="worksheet">
         <dd>units</dd>
         <dd>
             <label><input type="radio" name="units" value="in" checked="checked"/>inches</label><br />
             <label><input type="radio" name="units" value="cm" />centimeters</label><br />
             <label><input type="radio" name="units" value="mm" />millimeters</label>
+        </dd>
+        <dd class="help">
+            Changing the unit converts every measurement on this page immediately.
+            Scale lengths, string widths at the nut and bridge, fretboard overhangs
+            and string gauges are all rescaled, and the diagram and the tables are
+            recalculated from the converted values.
+            <p>
+            Values that are not lengths are left untouched: the perpendicular fret
+            distance is a ratio, and the number of frets, the number of strings,
+            the tones per octave and the tuning are counts.
+            </p>
+            <p>
+            The selected unit is also written into the exported SVG, PDF and DXF so
+            that they print and import at the correct physical size.
+            </p>
         </dd>
         <dd>display</dd>
         <dd>
@@ -461,7 +623,7 @@ as well as fretboards for instruments that play just or meantone scales.
                 <dd>
                     <dl>
                         <dt>fundamental scale length</dt>
-                        <dd><input type="text" id="len" value="25" /></dd>
+                        <dd><input type="text" id="len" value="25" /> <span class="unit"></span></dd>
                         <dd class="help">
                             The scale length is the playing/speaking length of the 
                             string measured from the nut to the bridge. 
@@ -480,7 +642,7 @@ as well as fretboards for instruments that play just or meantone scales.
                 <dd>
                     <dl>
                         <dt>first string scale length</dt>
-                        <dd><input type="text" id="lenF" value="25" /></dd>
+                        <dd><input type="text" id="lenF" value="25" /> <span class="unit"></span></dd>
                         <dd class="help">
                             The scale length is the playing/speaking length of the 
                             string measured from the nut to the bridge. 
@@ -488,7 +650,7 @@ as well as fretboards for instruments that play just or meantone scales.
                             Enter the actual scale length of the first (traditional high E) string. 
                         </dd>
                         <dt>last string scale length</dt>
-                        <dd><input type="text" id="lenL" value="28" /></dd>
+                        <dd><input type="text" id="lenL" value="28" /> <span class="unit"></span></dd>
                         <dd class="help">
                             The scale length is the playing/speaking length of the 
                             string measured from the nut to the bridge. 
@@ -603,7 +765,7 @@ Fret  P.D.    Fret  P.D.
             </dl>
         </dd>
         <dt>string width at the nut</dt>
-        <dd><input type="text" id="nutWidth" value="1.375" /></dd>
+        <dd><input type="text" id="nutWidth" value="1.375" /> <span class="unit"></span></dd>
         <dd class="help">
             The string width at the nut is the distance along the nut from the center 
             of the first string to the center of the last string.
@@ -615,7 +777,7 @@ Fret  P.D.    Fret  P.D.
         </dd>
 
         <dt>string width at the bridge</dt>
-        <dd><input type="text" id="bridgeWidth" value="2.125" /></dd>
+        <dd><input type="text" id="bridgeWidth" value="2.125" /> <span class="unit"></span></dd>
         <dd class="help">
             The string width at the bridge is the distance along the bridge from the center 
             of the first string to the center of the last string.            
@@ -654,9 +816,10 @@ Fret  P.D.    Fret  P.D.
               be wider than that by half of the sum of their gauges.
             </p>
             <p>
-               Enter the thickness of each string, with String 1 being the thinnest/highest. 
-               For example, a standard set of electric guitar strings, in inches, would be 0.010, 0.013, 0.017, 0.026, 0.036, 0.046. 
-               If you are using metric, please convert your string gauges to metric as well.
+               Enter the thickness of each string, with String 1 being the thinnest/highest.
+               For example, a standard set of electric guitar strings, in inches, would be 0.010, 0.013, 0.017, 0.026, 0.036, 0.046.
+               Enter the gauges in the unit selected at the top of the page; they are
+               converted along with every other measurement when you change it.
             </p>
         </dd>
         
@@ -664,15 +827,15 @@ Fret  P.D.    Fret  P.D.
         <dd>
             <dl id="overhang" class="alternative">
                 <dt id="equal">equal</dt>
-                <dd><input type="text" id="oE" value="0.09375" /></dd>
+                <dd><input type="text" id="oE" value="0.09375" /> <span class="unit"></span></dd>
                 <dt id="nutbridge">nut &amp; bridge</dt>
                 <dd>
                     <table>
                     <tr><td>nut</td><td>
-                    <input type="text" id="oN" value="0.09375" />
+                    <input type="text" id="oN" value="0.09375" /> <span class="unit"></span>
                     </td></tr>
                     <tr><td>bridge</td><td>
-                    <input type="text" id="oB" value="0.09375" />
+                    <input type="text" id="oB" value="0.09375" /> <span class="unit"></span>
                     </td></tr>
                     </table>
                 </dd>
@@ -681,9 +844,9 @@ Fret  P.D.    Fret  P.D.
                     <table>
                     <tr><td>last</td><td>first</td></tr>
                     <tr><td>
-                    <input type="text" id="oL" value="0.09375" />
+                    <input type="text" id="oL" value="0.09375" /> <span class="unit"></span>
                     </td><td>
-                    <input type="text" id="oF" value="0.09375" />
+                    <input type="text" id="oF" value="0.09375" /> <span class="unit"></span>
                     </td></tr>
                     </table>
                 </dd>
@@ -692,14 +855,14 @@ Fret  P.D.    Fret  P.D.
                     <table>
                     <tr><td> </td><td>last</td><td>first</td></tr>
                     <tr><td>nut</td><td>
-                    <input type="text" id="oNL" value="0.09375" />
+                    <input type="text" id="oNL" value="0.09375" /> <span class="unit"></span>
                     </td><td>
-                    <input type="text" id="oNF" value="0.09375" />
+                    <input type="text" id="oNF" value="0.09375" /> <span class="unit"></span>
                     </td></tr>
                     <tr><td>bridge</td><td>
-                    <input type="text" id="oBL" value="0.09375" />
+                    <input type="text" id="oBL" value="0.09375" /> <span class="unit"></span>
                     </td><td>
-                    <input type="text" id="oBF" value="0.09375" />
+                    <input type="text" id="oBF" value="0.09375" /> <span class="unit"></span>
                     </td></tr>
                     </table>
                 </dd>
@@ -795,7 +958,7 @@ Fret  P.D.    Fret  P.D.
     <div id="tables"><!-- --></div>
 </div>
 <p class="dev">The latest version in development is available on <a href="https://acspike.github.io/FretFind2D/src/fretfind.html">GitHub</a>.</p>
-<a href="http://github.com/acspike/FretFind2D"><img style="position: absolute; top: 0; right: 0; border: 0;" src="http://s3.amazonaws.com/github/ribbons/forkme_right_red_aa0000.png" alt="Fork me on GitHub" /></a>
+<a id="forkme" href="https://github.com/acspike/FretFind2D">Fork me on GitHub</a>
 </body>
 </html>
 

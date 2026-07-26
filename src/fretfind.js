@@ -26,6 +26,29 @@ var ff = (function(){
     function roundFloat(fltValue, intDecimal) {
         return Math.round(fltValue * Math.pow(10, intDecimal)) / Math.pow(10, intDecimal);
     }
+    // millimeters per supported unit; the single source of truth for conversion
+    var unitsInMM = {'in': 25.4, 'cm': 10, 'mm': 1};
+    // convert a length from one unit to another.
+    // rounded to six places so that repeated switching is stable: inch fractions
+    // times 25.4 terminate, so real values round-trip exactly
+    // (25 <-> 635, 1.375 <-> 34.925, 0.09375 <-> 2.38125).
+    function convertLength(value, fromUnits, toUnits) {
+        if (fromUnits === toUnits) {
+            return value;
+        }
+        return roundFloat(value * (unitsInMM[fromUnits] / unitsInMM[toUnits]), 6);
+    }
+    function isKnownUnit(units) {
+        return unitsInMM.hasOwnProperty(units);
+    }
+    // coerce a value that may have arrived from the url fragment into a number.
+    // every per-string field is numeric by contract, so anything else is a typo
+    // or an injection attempt. these values get interpolated into html attributes
+    // by setTuning/setLengths/setGauges, so a raw string there is a live xss hole.
+    function safeNumber(value, fallback) {
+        var number = typeof value === 'number' ? value : parseFloat(value);
+        return isFinite(number) ? number : fallback;
+    }
     // remove whitespace from both ends of a string
     function strip(str) {
         return str.replace(/^\s+|\s+$/g,'');
@@ -129,14 +152,11 @@ var ff = (function(){
         var y4 = line.end2.y;
 
         var denom = ((y4 - y3) * (x2 - x1)) - ((x4 - x3) * (y2 - y1));
-        var num1 = ((x4 - x3) * (y1 - y3)) - ((y4 - y3) * (x1 - x3));
-        var num2 = ((x2 - x1) * (y1 - y3)) - ((y2 - y1) * (x1 - x3));
-
-        var num = num1;
+        var num = ((x4 - x3) * (y1 - y3)) - ((y4 - y3) * (x1 - x3));
 
         if (denom !== 0) {
-            x = x1 + ((num / denom) * (x2 - x1));
-            y = y1 + ((num / denom) * (y2 - y1));
+            var x = x1 + ((num / denom) * (x2 - x1));
+            var y = y1 + ((num / denom) * (y2 - y1));
             retval = new Point(x, y);
         }
         return retval;
@@ -164,11 +184,9 @@ var ff = (function(){
         // initial step 0 or 1/1 is implicit
         this.steps = [[1,1]];
         this.title = '';
-        this.errors = 0;
-        this.errorstrings = [];        
+        this.errorstrings = [];
     }
     Scale.prototype.addError = function(str) {
-        this.errors++;
         this.errorstrings.push(str);
         return this;
     };
@@ -182,8 +200,11 @@ var ff = (function(){
             octave = 2;
         }
         var scale = new Scale();
-        if (tones === 0) {
-            scale.addError('Error: Number of tones must be non zero!');
+        //a blank or non-numeric field reaches here as NaN, and a negative count
+        //produces a ratio below 1; neither can place frets, so reject both rather
+        //than returning a scale that silently yields NaN geometry
+        if (!isFinite(tones) || tones <= 0) {
+            scale.addError('Error: Number of tones must be a positive number!');
         } else {
             var ratio = Math.pow(octave,1/tones);
             scale.addStep(ratio,1);
@@ -241,17 +262,29 @@ var ff = (function(){
                     num = parseInt(l, 10);
                 }
                 scale.addStep(num, denom);
-                
-                if (num < 0 || denom <= 0) {
-                    scale.addError('Error at "' + l + '": Negative and undefined ratios are not allowed!');
-                }   
+
+                //an unparseable tone lands here as NaN, which would otherwise
+                //propagate silently through every fret position
+                if (!isFinite(num) || !isFinite(denom) || num <= 0 || denom <= 0) {
+                    scale.addError('Error at "' + l + '": tone must be a positive ratio or cents value!');
+                }
             }
+        }
+        //a scale with no steps cannot place any fret
+        if (scale.steps.length < 2) {
+            scale.addError('Error: the scale defines no tones!');
         }
         return scale;
     }
     
     //extend guitar object with frets and other calculated information
     function fretGuitar(guitar) {
+        //callers should check guitar.scale.errorstrings first and show them to the user.
+        //fail loudly here rather than dereferencing undefined deep in the fret loop,
+        //where the symptom is an opaque "cannot read properties of undefined".
+        if (guitar.scale.steps.length < 2) {
+            throw new Error('Cannot calculate frets: the scale defines no tones.');
+        }
         var threshold = 0.0000000001;
         //test strings ends are on nut and bridge
         //if not don't do partials
@@ -289,7 +322,6 @@ var ff = (function(){
         if (denom !== 0) {
             parallelFrets = false;
         }
-        //var intersection = nut.intersect(bridge);
 
         // an array of fretlets for each string
         var strings = [];
@@ -316,9 +348,12 @@ var ff = (function(){
             frets[0].midline_pFretDist = doPartials ? 0 : Number.NaN;
             frets[0].totalRatio = 0;
             
+            //accumulated across strings, so it has to start at zero;
+            //without this every entry of guitar.fretWidths ends up NaN
+            if (totalWidth[0] === undefined) { totalWidth[0] = 0; }
             totalWidth[0] += frets[0].width;
 
-            for (j=1; j<=guitar.fret_count; j++) {
+            for (var j=1; j<=guitar.fret_count; j++) {
                 frets[j] = {};
                 var step = ((base + (j-1)) % (tones)) + 1;
                 var ratio = 1 - (
@@ -372,6 +407,7 @@ var ff = (function(){
                     frets[j].midline_nutDist = Number.NaN;
                     frets[j].midline_pFretDist = Number.NaN;
                 }
+                if (totalWidth[j] === undefined) { totalWidth[j] = 0; }
                 totalWidth[j] += frets[j].width;
             
             }
@@ -439,11 +475,18 @@ var ff = (function(){
         return guitar;
     }
     
-    var getTable = function(guitar) {
+    // unitLabel is optional; when given, length columns are labelled with it.
+    // getHTML deliberately omits it so the downloaded file keeps its current headers.
+    var getTable = function(guitar, unitLabel) {
         var i = 0;
+        //angles are degrees and never carry a length unit.
+        //&deg; as an entity, not a literal: the page declares no charset, so a
+        //non-ascii byte here would depend on how the server labels this file.
+        var u = unitLabel ? ' ('+unitLabel+')' : '';
+        var deg = unitLabel ? ' (&deg;)' : '';
         var output = ['<table class="foundfrets">'+
             '<tr><td colspan="4">Neck</td></tr>'+
-            '<tr><td> </td><td>endpoints</td><td>length</td><td>angle</td></tr>'+
+            '<tr><td> </td><td>endpoints'+u+'</td><td>length'+u+'</td><td>angle'+deg+'</td></tr>'+
             '<tr><td>Nut</td><td>'+guitar.nut.toString()+'</td><td>'+
             guitar.nut.length()+'</td><td>'+guitar.nut.angle()+'</td></tr>'+
             '<tr><td>Edge 1</td><td>'+guitar.meta[0].toString()+'</td><td>'+
@@ -457,7 +500,7 @@ var ff = (function(){
             '</table><br /><br />\n'];
         output.push('<table class="foundfrets">'+
             '<tr><td colspan="4">Strings</td></tr>'+
-            '<tr><td> </td><td>endpoints</td><td>length</td><td>angle</td></tr>');
+            '<tr><td> </td><td>endpoints'+u+'</td><td>length'+u+'</td><td>angle'+deg+'</td></tr>');
         for (i=0; i<guitar.strings.length; i++) {
             output.push('<tr><td>String ' +(i+1)+'</td><td>'+guitar.strings[i].toString()+'</td><td>'+
             guitar.strings[i].length()+'</td><td>'+guitar.strings[i].angle()+'</td></tr>');
@@ -466,11 +509,11 @@ var ff = (function(){
         output.push('<table class="foundfrets">');
         for (i=0; i<guitar.frets.length; i++) {
             output.push('<tr><td colspan="11">String ' +(i+1)+' Frets</td></tr>'+
-                '<tr><td>#</td><td>to nut</td><td>to fret</td><td>to bridge</td>'+
-                '<td>intersection point</td>');
+                '<tr><td>#</td><td>to nut'+u+'</td><td>to fret'+u+'</td><td>to bridge'+u+'</td>'+
+                '<td>intersection point'+u+'</td>');
             if (guitar.doPartials) {
-                output.push('<td>partial width</td><td>angle</td>'+
-                    '<td>mid to nut</td><td>mid to fret</td><td>mid to bridge</td><td>mid intersection</td>');
+                output.push('<td>partial width'+u+'</td><td>angle'+deg+'</td>'+
+                    '<td>mid to nut'+u+'</td><td>mid to fret'+u+'</td><td>mid to bridge'+u+'</td><td>mid intersection'+u+'</td>');
             }
             output.push('</tr>\n');
             for(var j=0; j<guitar.frets[i].length; j++) {
@@ -603,7 +646,11 @@ var ff = (function(){
     var getSVG = function(guitar, displayOptions) {
         var x = getExtents(guitar);
         var fret_class = guitar.doPartials ? 'pfret': 'ifret';
-        output = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="'+x.minx+' '+x.miny+' '+x.maxx+' '+x.maxy+
+        //viewBox is "min-x min-y width height", not "min-x min-y max-x max-y".
+        //getGuitar translates the design into the first quadrant so minx/miny are
+        //currently 0 and the two forms coincide, but stating it correctly keeps the
+        //output right if that ever stops holding.
+        var output = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="'+x.minx+' '+x.miny+' '+x.width+' '+x.height+
                         '" height="'+x.height+guitar.units+'" width="'+x.width+guitar.units+'" >\n'];
         output.push('<defs><style type="text/css"><![CDATA[\n'+
                     '\t.string{stroke:rgb(0,0,0);stroke-width:0.2%;}\n'+
@@ -687,10 +734,15 @@ var ff = (function(){
         var output = [wrap('Midline')+'\n'+wrap('endpoints')+sep+wrap('length')+sep+wrap('angle')+'\n'+
             wrap(guitar.midline.toString())+sep+guitar.midline.length()+sep+guitar.midline.angle()+'\n\n'];
         for (var i=0; i<guitar.frets.length; i++) {
+            //the partial columns are all NaN when doPartials is false, so they are
+            //omitted here exactly as getTable omits them
             output.push(wrap('String ' +(i+1))+'\n'+
                 wrap('#')+sep+wrap('to nut')+sep+wrap('to fret')+sep+wrap('to bridge')+sep+
-                wrap('intersection point')+sep+wrap('partial width')+sep+wrap('angle')+sep+
-                wrap('mid to nut')+sep+wrap('mid to fret')+sep+wrap('mid to bridge')+sep+wrap('mid intersection')+
+                wrap('intersection point')+
+                (guitar.doPartials ?
+                    sep+wrap('partial width')+sep+wrap('angle')+sep+
+                    wrap('mid to nut')+sep+wrap('mid to fret')+sep+wrap('mid to bridge')+sep+wrap('mid intersection')
+                    : '')+
                 '\n');
             for(var j=0; j<guitar.frets[i].length; j++) {
                 output.push(wrap(j===0?'n':j)+sep);
@@ -701,18 +753,20 @@ var ff = (function(){
                 output.push(roundFloat(guitar.frets[i][j].bridgeDist, precision));
                 output.push(sep);
                 output.push(wrap(guitar.frets[i][j].intersection.toString()));
-                output.push(sep);
-                output.push(roundFloat(guitar.frets[i][j].width, precision));
-                output.push(sep);
-                output.push(roundFloat(guitar.frets[i][j].angle, precision));
-                output.push(sep);
-                output.push(roundFloat(guitar.frets[i][j].midline_nutDist, precision));
-                output.push(sep);
-                output.push(roundFloat(guitar.frets[i][j].midline_pFretDist, precision));
-                output.push(sep);
-                output.push(roundFloat(guitar.frets[i][j].midline_bridgeDist, precision));
-                output.push(sep);
-                output.push(wrap(guitar.frets[i][j].midline_intersection.toString()));
+                if (guitar.doPartials) {
+                    output.push(sep);
+                    output.push(roundFloat(guitar.frets[i][j].width, precision));
+                    output.push(sep);
+                    output.push(roundFloat(guitar.frets[i][j].angle, precision));
+                    output.push(sep);
+                    output.push(roundFloat(guitar.frets[i][j].midline_nutDist, precision));
+                    output.push(sep);
+                    output.push(roundFloat(guitar.frets[i][j].midline_pFretDist, precision));
+                    output.push(sep);
+                    output.push(roundFloat(guitar.frets[i][j].midline_bridgeDist, precision));
+                    output.push(sep);
+                    output.push(wrap(guitar.frets[i][j].midline_intersection.toString()));
+                }
                 output.push('\n');
             }
         }
@@ -944,9 +998,17 @@ var ff = (function(){
                 (seg.end2.x-intersect)+'\n21\n'+
                 seg.end2.y+'\n31\n0\n';
         };
-        var x = getExtents(guitar);
         var output = [];
         output.push('999\nDXF created by FretFind2D\n');
+        //declare the drawing units so CAD/CAM imports at the right scale
+        //instead of falling back to its own default
+        //$INSUNITS: 1=inches 4=millimeters 5=centimeters
+        //$MEASUREMENT: 0=imperial 1=metric
+        var insunits = guitar.units === 'mm' ? 4 : (guitar.units === 'cm' ? 5 : 1);
+        output.push('0\nSECTION\n2\nHEADER\n'+
+            '9\n$INSUNITS\n70\n'+insunits+'\n'+
+            '9\n$MEASUREMENT\n70\n'+(guitar.units === 'in' ? 0 : 1)+'\n'+
+            '0\nENDSEC\n');
         output.push('0\nSECTION\n2\nENTITIES\n');
         
         if(displayOptions.showStrings) {
@@ -1022,7 +1084,7 @@ var ff = (function(){
         }
         var output = '';
         for (var i=0; i<strings; i++) {
-            output += 'string '+(i+1)+': <input type="text" value="'+(tunings[i] || 0)+'" /><br />';
+            output += 'string '+(i+1)+': <input type="text" value="'+safeNumber(tunings[i], 0)+'" /><br />';
         }
         $('#'+tuning_id).html(output);
         $('#'+tuning_id+' > input').change(change_callback);
@@ -1065,6 +1127,10 @@ var ff = (function(){
         setPrecision: function(x) {precision = x;},
         Point: Point,
         Segment: Segment,
+        //units
+        convertLength: convertLength,
+        isKnownUnit: isKnownUnit,
+        safeNumber: safeNumber,
         //scales
         Scale: Scale,
         etScale: etScale,

@@ -57,6 +57,31 @@ table.foundfrets td {
 input {
     width: 100px;
 }
+span.unit {
+    font-size: 0.8em;
+    color: #555;
+    margin-left: 4px;
+}
+/* replaces the old ribbon image, which was an http:// url on a long dead s3
+   bucket and therefore both broken and blocked as mixed content on https */
+#forkme {
+    position: absolute;
+    top: 0;
+    right: 0;
+    padding: 6px 12px;
+    background-color: #aa0000;
+    color: white;
+    font-size: 0.8em;
+    text-decoration: none;
+}
+#errors {
+    clear: both;
+    margin: 5px;
+    padding: 10px;
+    border: 2px solid red;
+    color: #900;
+    font-weight: bold;
+}
 .experimental {
   color: red;
   font-weight: bold;
