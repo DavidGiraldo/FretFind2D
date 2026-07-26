@@ -611,11 +611,17 @@ var ff = (function(){
     };
     
     var drawGuitar = function(paper, guitar, displayOptions) {
-        var stringstyle = {stroke:'rgb(0,0,0)','stroke-width':'1px'};
-        var edgestyle = {stroke:'rgb(0,0,255)','stroke-width':'1px'};
-        var metastyle = {stroke:'rgb(221,221,221)','stroke-width':'1px'};
-        var pfretstyle = {stroke:'rgb(255,0,0)','stroke-linecap':'round','stroke-width':'1px'};
-        var ifretstyle = {stroke:'rgb(255,0,0)','stroke-linecap':'round','stroke-width':'3px'};
+        //stroke-width must be a NUMBER, not a css length like '1px'. The whole
+        //drawing is scaled by ~32 at the end of this function, and Raphael 2
+        //divides the stroke width by that scale so lines stay one pixel wide.
+        //'1px' is not a number, so that arithmetic yields stroke-width="NaN",
+        //the browser falls back to 1 *user unit*, and every line renders 32px
+        //wide -- the fretboard comes out a solid block of colour.
+        var stringstyle = {stroke:'rgb(0,0,0)','stroke-width':1};
+        var edgestyle = {stroke:'rgb(0,0,255)','stroke-width':1};
+        var metastyle = {stroke:'rgb(221,221,221)','stroke-width':1};
+        var pfretstyle = {stroke:'rgb(255,0,0)','stroke-linecap':'round','stroke-width':1};
+        var ifretstyle = {stroke:'rgb(255,0,0)','stroke-linecap':'round','stroke-width':3};
         var fretstyle = guitar.doPartials ? pfretstyle : ifretstyle;
 
         paper.clear();

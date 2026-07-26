@@ -246,6 +246,35 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
         r.check('hiding the strings removes a path', await shapes() === 6, await shapes());
         await b.evaluate("document.getElementById('showMetas').click()");
         r.check('hiding the metas removes another', await shapes() === 5, await shapes());
+        // Counting elements says nothing about how they look: the whole drawing
+        // carries a ~32x transform, so the stroke width has to be divided by it
+        // to render one pixel wide. Raphael 2 does that arithmetic itself, but
+        // only if given a number -- a css length like '1px' yields
+        // stroke-width="NaN", the browser falls back to 1 user unit, and every
+        // line comes out 32px wide, turning the fretboard into a solid block
+        // while all five element counts above still pass.
+        await b.load(b.appUrl());
+        const strokes = await b.evaluate(`(function(){
+            var out = [];
+            var nodes = document.querySelectorAll('#diagram path, #diagram rect');
+            for (var i=0; i<nodes.length; i++) {
+                var m = /matrix\\(([^,]+)/.exec(nodes[i].getAttribute('transform') || '');
+                out.push({
+                    // as a string: NaN does not survive the trip to node, it
+                    // arrives as null, and isFinite(null) is true
+                    raw: String(nodes[i].getAttribute('stroke-width')),
+                    scale: m ? parseFloat(m[1]) : 1
+                });
+            }
+            return out;
+        })()`);
+        r.check('every stroke width is a real number',
+            strokes.length > 0 && strokes.every(s => Number.isFinite(parseFloat(s.raw))),
+            JSON.stringify(strokes.map(s => s.raw)));
+        r.check('every line renders one pixel wide after the transform',
+            strokes.every(s => Math.abs(parseFloat(s.raw) * s.scale - 1) < 0.01),
+            JSON.stringify(strokes.map(s => s.raw + ' x ' + s.scale)));
+
         // the fretlet path really contains one subpath per fretlet
         const moves = await b.evaluate(
             "(function(){var d=Array.prototype.slice.call(document.querySelectorAll('#diagram path'))" +
