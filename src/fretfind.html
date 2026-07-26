@@ -75,7 +75,8 @@ var getLengths = function(id) {
     return lengths;
 };
 var setLengths = function(length_id, string_count_id, change_callback, lengths) {
-    var strings = ff.getInt(string_count_id);
+    //capped: see ff.MAX_STRINGS. validateGuitar reports the real number.
+    var strings = Math.min(ff.getInt(string_count_id), ff.MAX_STRINGS);
     if (typeof lengths === 'undefined') {
         lengths = getLengths(length_id);
     }
@@ -99,7 +100,8 @@ var getGauges = function(id) {
     return gauges;
 };
 var setGauges = function(gauge_id, string_count_id, change_callback, gauges) {
-    var strings = ff.getInt(string_count_id);
+    //capped: see ff.MAX_STRINGS. validateGuitar reports the real number.
+    var strings = Math.min(ff.getInt(string_count_id), ff.MAX_STRINGS);
     if (typeof gauges === 'undefined') {
         gauges = getGauges(gauge_id);
     }
@@ -170,7 +172,7 @@ var getGuitar = function() {
     var bridgeWidth = ff.getFlt('bridgeWidth');
     //a blank field reads back as NaN, which would build an Array of length NaN
     //further down; clamp here and let validateGuitar report it to the user
-    var strings = Math.max(1, ff.safeNumber(ff.getInt('numStrings'), 1));
+    var strings = Math.max(1, Math.min(ff.safeNumber(ff.getInt('numStrings'), 1), ff.MAX_STRINGS));
     var units = $("input:checked[name='units']").val();
 
 
@@ -380,6 +382,17 @@ var validateGuitar = function(guitar) {
     }
     if (!isFinite(guitar.fret_count) || guitar.fret_count < 0) {
         problems.push('Error: number of frets must be zero or more.');
+    }
+    //the counts are read from the form rather than the guitar, because both are
+    //clamped on the way in so that a crafted permalink cannot build a million
+    //inputs. Report the number that was actually asked for, or the clamp would
+    //silently draw a different instrument than the one requested.
+    if (guitar.fret_count > ff.MAX_FRETS) {
+        problems.push('Error: number of frets must be ' + ff.MAX_FRETS + ' or fewer.');
+    }
+    var requestedStrings = ff.getInt('numStrings');
+    if (requestedStrings > ff.MAX_STRINGS) {
+        problems.push('Error: number of strings must be ' + ff.MAX_STRINGS + ' or fewer.');
     }
     var finite = function(point) { return isFinite(point.x) && isFinite(point.y); };
     var segments = [guitar.edge1, guitar.edge2].concat(guitar.strings);

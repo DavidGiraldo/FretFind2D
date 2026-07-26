@@ -151,6 +151,24 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
         r.check('a legacy +-encoded space still decodes', String(await b.evaluate("$('#scl').val()")).indexOf('my scale here') > -1,
             JSON.stringify(await b.evaluate("$('#scl').val()")));
 
+        // an absurd count from a crafted link must be refused, not attempted:
+        // the cost is linear in frets times strings and the table is wider again,
+        // so #numFrets=2000000 locked the tab outright
+        await b.load(b.appUrl('#numFrets=2000000'));
+        r.check('an absurd fret count is refused', await b.evaluate("$('#errors').css('display')") === 'block');
+        r.check('and says what the limit is', String(await b.evaluate("$('#errors').text()")).indexOf('1000 or fewer') > -1,
+            await b.evaluate("$('#errors').text()"));
+        await b.load(b.appUrl('#numStrings=5000'));
+        r.check('an absurd string count is refused', await b.evaluate("$('#errors').css('display')") === 'block');
+        r.check('and no more than MAX_STRINGS inputs are built',
+            Number(await b.evaluate("$('#tuning > input').length")) === 100,
+            await b.evaluate("$('#tuning > input').length"));
+        r.check('neither throws', await noErrors(), await errs());
+
+        await b.load(b.appUrl('#u[]=in&len=24.75'));
+        r.check('a non-string unit is rejected by isKnownUnit',
+            await b.evaluate("typeof currentUnits") === 'string', await b.evaluate('typeof currentUnits'));
+
         await b.load(b.appUrl('#u=furlong&len=24.75&nutWidth=1.375'));
         r.check('an unknown unit falls back to inches', await b.evaluate("$(\"input:checked[name='units']\").val()") === 'in');
         await b.evaluate("document.querySelector(\"input[name='units'][value='mm']\").click()");

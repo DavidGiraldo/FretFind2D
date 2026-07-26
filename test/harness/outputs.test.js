@@ -31,8 +31,11 @@ for (const [value, mm] of [[25, 635], [1.375, 34.925], [2.125, 53.975], [0.09375
 r.check('convertLength 25 in -> 63.5 cm', ff.convertLength(25, 'in', 'cm') === 63.5);
 r.check('convertLength gauge 0.010 in -> 0.254 mm', ff.convertLength(0.01, 'in', 'mm') === 0.254);
 r.check('convertLength is identity for the same unit', ff.convertLength(7, 'mm', 'mm') === 7);
-r.check('isKnownUnit accepts in/cm/mm', ['in', 'cm', 'mm'].every(ff.isKnownUnit));
+r.check('isKnownUnit accepts in/cm/mm', ['in', 'cm', 'mm'].every(u => ff.isKnownUnit(u)));
 r.check('isKnownUnit rejects anything else', !ff.isKnownUnit('furlong') && !ff.isKnownUnit(undefined));
+// #u[]=in arrives as ['in'], which stringifies to "in" as a property key
+r.check('isKnownUnit rejects a non-string that stringifies to a unit', !ff.isKnownUnit(['in']));
+r.check('the count ceilings are exported', ff.MAX_FRETS > 0 && ff.MAX_STRINGS > 0, `${ff.MAX_FRETS}/${ff.MAX_STRINGS}`);
 
 // safeNumber is what keeps url fragment values out of generated html
 r.check('safeNumber coerces a numeric string', ff.safeNumber('12.5', 0) === 12.5);
@@ -66,6 +69,7 @@ r.check('safeNumber keeps zero', ff.safeNumber(0, 9) === 0);
     } catch (e) { threw = e.message; }
     r.check('never throws on a malformed fragment', threw === '', threw);
     r.check('an invalid escape is kept verbatim', d('#a=%ZZ').a === '%ZZ');
+    r.check('a + still decodes even when the escape beside it is broken', d('#a=one+two%ZZ').a === 'one two%ZZ', d('#a=one+two%ZZ').a);
     r.check('markup comes back as an inert string', d('#c=' + encodeURIComponent('"><img>')).c === '"><img>');
     // a fragment must not be able to shadow object methods
     const polluted = d('#hasOwnProperty=1&__proto__=2&constructor=3');

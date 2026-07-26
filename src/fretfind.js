@@ -39,8 +39,18 @@ var ff = (function(){
         return roundFloat(value * (unitsInMM[fromUnits] / unitsInMM[toUnits]), 6);
     }
     function isKnownUnit(units) {
-        return unitsInMM.hasOwnProperty(units);
+        //the typeof guard matters: hasOwnProperty coerces its argument to a
+        //property key, so a fragment of #u[]=in arrives as ['in'], stringifies
+        //to "in" and would pass, leaving currentUnits an Array
+        return typeof units === 'string' && unitsInMM.hasOwnProperty(units);
     }
+    // Ceilings for the two counts that drive every loop and every generated
+    // input. Far above any real instrument -- a 47-string harp, a few hundred
+    // frets on a microtonal board -- but bounded, because a crafted permalink
+    // like #numFrets=2000000 otherwise locks the browser tab: the cost is linear
+    // in frets times strings, and the fret table is five columns wider again.
+    var MAX_FRETS = 1000;
+    var MAX_STRINGS = 100;
     // coerce a value that may have arrived from the url fragment into a number.
     // every per-string field is numeric by contract, so anything else is a typo
     // or an injection attempt. these values get interpolated into html attributes
@@ -55,7 +65,8 @@ var ff = (function(){
         try {
             return decodeURIComponent(text.replace(/\+/g, ' '));
         } catch (e) {
-            return text;
+            //still hand back the plus-decoded text: only the escape is broken
+            return text.replace(/\+/g, ' ');
         }
     }
     // Parse a url fragment into an object. Replaces $.deparam.fragment from
@@ -1147,7 +1158,9 @@ var ff = (function(){
         return tunings;
     };
     var setTuning = function(tuning_id, string_count_id, change_callback, tunings) {
-        var strings = getInt(string_count_id);
+        //capped so a crafted permalink cannot ask for a million inputs;
+        //validateGuitar reports the real number back to the user
+        var strings = Math.min(getInt(string_count_id), MAX_STRINGS);
         if (typeof tunings === 'undefined') {
             tunings = getTuning(tuning_id);
         }
@@ -1205,6 +1218,8 @@ var ff = (function(){
         isKnownUnit: isKnownUnit,
         safeNumber: safeNumber,
         deparamFragment: deparamFragment,
+        MAX_FRETS: MAX_FRETS,
+        MAX_STRINGS: MAX_STRINGS,
         //scales
         Scale: Scale,
         etScale: etScale,
