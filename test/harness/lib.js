@@ -184,9 +184,14 @@ async function openBrowser({ port, cdpPort }) {
     const ws = new WebSocket(targets[0].webSocketDebuggerUrl);
     await new Promise(r => ws.addEventListener('open', r));
     const pending = new Map();
+    const listeners = new Set();
     let nextId = 0;
     ws.addEventListener('message', ev => {
         const msg = JSON.parse(ev.data);
+        if (msg.method) {
+            for (const fn of Array.from(listeners)) fn(msg.method, msg.params);
+            return;
+        }
         const p = pending.get(msg.id);
         if (!p) return;
         pending.delete(msg.id);
@@ -231,8 +236,29 @@ async function openBrowser({ port, cdpPort }) {
 
     const appUrl = hash => `http://127.0.0.1:${port}/src/fretfind.html` + (hash || '');
 
+    // Waits for Chrome's own "this download finished" signal and hands back the
+    // path it wrote. Watching the directory instead is unreliable: the file is
+    // created before it is filled, and an unrelated stray .crdownload in the same
+    // folder is enough to make a poll pick the wrong entry or time out.
+    async function download(trigger, timeoutMs = 20000) {
+        const done = new Promise((resolve, reject) => {
+            const timer = setTimeout(() => { listeners.delete(fn); reject(new Error('download timed out')); }, timeoutMs);
+            const fn = (method, params) => {
+                if (method !== 'Browser.downloadProgress') return;
+                if (params.state === 'completed') {
+                    clearTimeout(timer); listeners.delete(fn); resolve(params.filePath);
+                } else if (params.state === 'canceled') {
+                    clearTimeout(timer); listeners.delete(fn); reject(new Error('download canceled'));
+                }
+            };
+            listeners.add(fn);
+        });
+        await trigger();
+        return done;
+    }
+
     return {
-        evaluate, load, appUrl, send,
+        evaluate, load, appUrl, send, download,
         url: p => `http://127.0.0.1:${port}${p}`,
         async close() {
             try { ws.close(); } catch { /* already gone */ }

@@ -49,6 +49,57 @@ var ff = (function(){
         var number = typeof value === 'number' ? value : parseFloat(value);
         return isFinite(number) ? number : fallback;
     }
+    // a hand-edited link can carry an invalid escape sequence; keep the text
+    // verbatim rather than letting one bad pair abort the whole restore
+    function decodeParam(text) {
+        try {
+            return decodeURIComponent(text.replace(/\+/g, ' '));
+        } catch (e) {
+            return text;
+        }
+    }
+    // Parse a url fragment into an object. Replaces $.deparam.fragment from
+    // jquery.ba-bbq, abandoned in 2010, which reads $.browser and therefore
+    // throws on every load from jQuery 1.9 onwards.
+    //
+    // Handles what $.param writes: plain key=value pairs plus the key[]=a&key[]=b
+    // form that carries the tuning, individual lengths and gauges. Values come
+    // back as strings and callers sanitize them (safeNumber, isKnownUnit,
+    // clickAlt); nothing here may be interpolated into html.
+    //
+    // The result has a null prototype on purpose. A fragment containing
+    // hasOwnProperty=1 would otherwise shadow that method and break any caller
+    // that used it to test for a key.
+    function deparamFragment(fragment) {
+        var params = Object.create(null);
+        var text = typeof fragment === 'string' ? fragment : '';
+        var hash = text.indexOf('#');
+        if (hash !== -1) {
+            text = text.substring(hash + 1);
+        }
+        var pairs = text.split('&');
+        for (var i = 0; i < pairs.length; i++) {
+            if (pairs[i] === '') {
+                continue;
+            }
+            var split = pairs[i].indexOf('=');
+            var key = decodeParam(split === -1 ? pairs[i] : pairs[i].substring(0, split));
+            var value = split === -1 ? '' : decodeParam(pairs[i].substring(split + 1));
+            if (key.substring(key.length - 2) === '[]') {
+                key = key.substring(0, key.length - 2);
+                if (key === '') {
+                    continue;
+                }
+                if (!(params[key] instanceof Array)) {
+                    params[key] = [];
+                }
+                params[key].push(value);
+            } else if (key !== '') {
+                params[key] = value;
+            }
+        }
+        return params;
+    }
     // remove whitespace from both ends of a string
     function strip(str) {
         return str.replace(/^\s+|\s+$/g,'');
@@ -1094,10 +1145,14 @@ var ff = (function(){
         //append to previous sibling dt
         $('#'+form_id).find('dd.help').prev().prev().
             append(' [<a class="help" href="#">?</a>]').
-            find('a.help').toggle(
-                function(){$(this).parent().next().next().css('display','block');},
-                function(){$(this).parent().next().next().css('display','none');}
-            );
+            find('a.help').click(function(event){
+                //jQuery removed the two-function .toggle(fnOn, fnOff) shorthand
+                //in 1.9. It suppressed the default action, so this does too,
+                //otherwise href="#" jumps the page to the top on every click.
+                event.preventDefault();
+                var help = $(this).parent().next().next();
+                help.css('display', help.css('display') === 'block' ? 'none' : 'block');
+            });
     };
     var initAlternatives = function(form_id, change_callback) {
         //create alternative switches
@@ -1131,6 +1186,7 @@ var ff = (function(){
         convertLength: convertLength,
         isKnownUnit: isKnownUnit,
         safeNumber: safeNumber,
+        deparamFragment: deparamFragment,
         //scales
         Scale: Scale,
         etScale: etScale,

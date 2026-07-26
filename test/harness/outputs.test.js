@@ -40,6 +40,40 @@ r.check('safeNumber rejects markup', ff.safeNumber('"><img src=x onerror=1>', 7)
 r.check('safeNumber rejects NaN and undefined', ff.safeNumber(NaN, 3) === 3 && ff.safeNumber(undefined, 3) === 3);
 r.check('safeNumber keeps zero', ff.safeNumber(0, 9) === 0);
 
+// ------------------------------------------------ url fragment parsing (bbq)
+
+{
+    const d = ff.deparamFragment.bind(ff);
+    r.check('parses a plain pair', d('#len=25').len === '25');
+    r.check('tolerates a missing leading #', d('len=25').len === '25');
+    r.check('an empty fragment yields nothing', Object.keys(d('')).length === 0 && Object.keys(d('#')).length === 0);
+    r.check('handles a non-string argument', Object.keys(d(undefined)).length === 0);
+    r.check('parses several pairs', d('#a=1&b=2').a === '1' && d('#a=1&b=2').b === '2');
+    r.check('decodes percent escapes', d('#scl=' + encodeURIComponent('! x\ntitle')).scl === '! x\ntitle');
+    r.check('decodes + as a space', d('#a=one+two').a === 'one two');
+    r.check('a key with no = gives an empty value', d('#flag').flag === '');
+    r.check('skips empty pairs', Object.keys(d('#&&a=1&&')).length === 1);
+    // the array form is what carries the tuning, individual lengths and gauges
+    const tuning = d('#t%5B%5D=0&t%5B%5D=7&t%5B%5D=3').t;
+    r.check('parses the key[]= array form', Array.isArray(tuning) && tuning.join(',') === '0,7,3', JSON.stringify(tuning));
+    r.check('a single-element array is still an array', Array.isArray(d('#il%5B%5D=25').il));
+    r.check('an unencoded key[]= works too', Array.isArray(d('#t[]=1&t[]=2').t));
+    r.check('the last plain value wins', d('#a=1&a=2').a === '2');
+    // it parses untrusted input, so it must never throw
+    let threw = '';
+    try {
+        d('#a=%ZZ&b=%&c=' + encodeURIComponent('"><img src=x onerror=1>') + '&%5B%5D=x&d');
+    } catch (e) { threw = e.message; }
+    r.check('never throws on a malformed fragment', threw === '', threw);
+    r.check('an invalid escape is kept verbatim', d('#a=%ZZ').a === '%ZZ');
+    r.check('markup comes back as an inert string', d('#c=' + encodeURIComponent('"><img>')).c === '"><img>');
+    // a fragment must not be able to shadow object methods
+    const polluted = d('#hasOwnProperty=1&__proto__=2&constructor=3');
+    r.check('hasOwnProperty is just a key', polluted.hasOwnProperty === '1', String(polluted.hasOwnProperty));
+    r.check('the result has a null prototype', Object.getPrototypeOf(polluted) === null);
+    r.check('Object.prototype is not polluted', ({}).hasOwnProperty !== '1' && ({}).__proto__ !== '2');
+}
+
 // ------------------------------------------------------------- scale parsing
 
 r.check('etScale rejects a zero tone count', ff.etScale(0, 2).errorstrings.length === 1);

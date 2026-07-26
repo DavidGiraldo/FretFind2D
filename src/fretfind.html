@@ -22,8 +22,7 @@
 <meta name="keywords" lang="en" content="FretFind, stringed instrument, luthier, fret, guitar, fret placement calculator" />
 <meta name="description" lang="en" content="FretFind2d models fretboards as a system of line segments on a two dimensional plane to design freboards with multiple scale lenghts and microtonal scales." />
 <link rel="stylesheet" type="text/css" href="fretfind.css" />
-<script type="text/javascript" src="libs/jquery-1.4.2.min.js"><!-- --></script>
-<script type="text/javascript" src="libs/jquery.ba-bbq.min.js"><!-- --></script>
+<script type="text/javascript" src="libs/jquery-3.7.1.min.js"><!-- --></script>
 <script type="text/javascript" src="libs/raphael-min.js"><!-- --></script>
 <script type="text/javascript" src="libs/FileSaver.min.js"><!-- --></script>
 <script type="text/javascript" src="libs/base64.js"><!-- --></script>
@@ -53,8 +52,8 @@ var convertLengthInputs = function(from, to) {
         var value = parseFloat($(item).val());
         //leave blank or malformed fields alone instead of writing NaN into them
         if (isFinite(value)) {
-            //val() does not fire change in jQuery 1.4.x; the single redraw comes
-            //from the units radio's own change handler
+            //val() does not fire change; the single redraw comes from the
+            //units radio's own change handler
             $(item).val(ff.convertLength(value, from, to));
         }
     };
@@ -143,11 +142,11 @@ var computeOffsets = function(strings, gauges, actual_length, perp_width, spacin
 // get the user-selected display options for on-screen display and all output options (i.e. SVG, PDF).
 var getDisplayOptions = function() {
 
-    var showStrings = $("#showStrings").attr("checked");
-    var showFretboardEdges = $("#showFretboardEdges").attr("checked");
-    var showMetas = $("#showMetas").attr("checked");
-    var showBoundingBox = $("#showBoundingBox").attr("checked");
-    var extendFrets = $("#extendFrets").attr("checked");
+    var showStrings = $("#showStrings").prop("checked");
+    var showFretboardEdges = $("#showFretboardEdges").prop("checked");
+    var showMetas = $("#showMetas").prop("checked");
+    var showBoundingBox = $("#showBoundingBox").prop("checked");
+    var extendFrets = $("#extendFrets").prop("checked");
 
     return {
         showStrings: showStrings,
@@ -424,8 +423,9 @@ var onChange = function() {
 
 // select an alternative tab by its element id.
 // getElementById is used deliberately instead of $('#'+id): the id comes from the
-// url fragment, and jQuery 1.4.2 treats a selector string containing a tag as html
-// to build, so $('#'+id) with a crafted id executes script.
+// url fragment. jQuery before 1.9 treated a selector string containing a tag as
+// html to build, so $('#'+id) with a crafted id executed script. 3.x rejects it,
+// but building a selector from untrusted text stays a bad habit worth not having.
 var clickAlt = function(id) {
     var element = typeof id === 'string' ? document.getElementById(id) : null;
     if (element) {
@@ -434,7 +434,7 @@ var clickAlt = function(id) {
 };
 
 var updateFormFromHash = function() {
-    var params = $.deparam.fragment();
+    var params = ff.deparamFragment(window.location.hash);
     //the values in the link are already expressed in the link's unit, so adopt that
     //unit before restoring anything. this is what stops the radio click below from
     //converting values that are already correct.
@@ -443,7 +443,9 @@ var updateFormFromHash = function() {
     currentUnits = ff.isKnownUnit(params['u']) ? params['u'] : 'in';
     $('#worksheet').find('input[id], textarea[id]').each(function(index,item){
         var id = $(item).attr('id');
-        if (params.hasOwnProperty(id)){
+        //`in`, not hasOwnProperty: deparamFragment returns a null-prototype
+        //object, which has no methods to call
+        if (id in params){
             $(item).val(params[id]);
         }
     });
