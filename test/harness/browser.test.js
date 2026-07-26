@@ -353,9 +353,25 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
             // own: with floats at 1650 the table's top equalled the drawing's
             // bottom exactly, while sitting indented in its column. What makes it
             // a real row of its own is starting at the content's left edge.
-            r.check(`${width}px: the results are a full-width row of their own`,
-                L.tables.x <= L.form.x + 1 && L.tables.y >= L.draw.bottom,
-                `tables.x=${L.tables.x} form.x=${L.form.x} tables.y=${L.tables.y} draw.bottom=${L.draw.bottom}`);
+            // There are two legitimate placements and one broken family. Either
+            // the results are the fourth column, starting clear of everything to
+            // their left, or they are a full-width row starting at the content's
+            // left edge. What the floats did was neither: at 1850 the table sat
+            // on top of the downloads column (x=608 < dl.right=762) and at 1650
+            // it was indented into the drawing's own column (x=408, with its top
+            // exactly the drawing's bottom).
+            const inRightColumn = L.tables.y < L.draw.bottom;
+            const placed = inRightColumn
+                ? L.tables.x >= L.dl.right
+                : L.tables.x <= L.form.x + 1;
+            r.check(`${width}px: the results sit in the right column or in a row of their own`,
+                placed,
+                `${inRightColumn ? 'right column' : 'own row'}: tables.x=${L.tables.x} ` +
+                `form.x=${L.form.x} dl.right=${L.dl.right} tables.y=${L.tables.y} draw.bottom=${L.draw.bottom}`);
+            // sticky was tried on the drawing and was a mistake: 800px tall, it
+            // scrolled over the tables and neither was legible. Pin it down.
+            r.check(`${width}px: the drawing is not sticky`,
+                await b.evaluate("getComputedStyle(document.getElementById('diagram')).position") === 'static');
             r.check(`${width}px: the page does not scroll sideways`, L.pageOverflow <= 0, L.pageOverflow);
             // the check the stroke assertion cannot make: it stays green even
             // when css has cropped the drawing
@@ -363,10 +379,38 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
             r.check(`${width}px: the drawing keeps its 200px canvas`, L.draw.w >= 200, L.draw.w);
         }
 
+        // Above the breakpoint the results become the fourth column, bounded to
+        // one screenful so the form and the fretboard stay put while only the
+        // numbers scroll. That is what the sticky drawing was for, done right.
+        await b.setViewport(1600, 900);
+        await b.load(b.appUrl());
+        let L = await b.evaluate(LAYOUT);
+        r.check('1600px: results are the fourth column, top-aligned with the form',
+            L.tables.x >= L.dl.right && Math.abs(L.tables.y - L.form.y) < 40,
+            `tables=${L.tables.x},${L.tables.y} dl.right=${L.dl.right} form.y=${L.form.y}`);
+        const pane = await b.evaluate(`(function(){
+            var t = document.getElementById('tables');
+            return {fits: t.getBoundingClientRect().bottom <= window.innerHeight,
+                    scrolls: t.scrollHeight > t.clientHeight,
+                    docH: Math.round(document.documentElement.scrollHeight),
+                    vh: window.innerHeight};
+        })()`);
+        r.check('1600px: the pane ends within the window', pane.fits === true, `bottom vs ${pane.vh}`);
+        r.check('1600px: and scrolls internally instead', pane.scrolls === true);
+        // the tables are ~3400px tall; unbounded they made the page that long
+        r.check('1600px: the page is no longer thousands of pixels tall', pane.docH < 1600, pane.docH);
+
+        // one pixel below the breakpoint it must flip back to a full-width row
+        await b.setViewport(1399, 900);
+        await b.load(b.appUrl());
+        L = await b.evaluate(LAYOUT);
+        r.check('1399px: results flip back to a full-width row', L.tables.x <= L.form.x + 1 && L.tables.y >= L.draw.bottom,
+            `tables=${L.tables.x},${L.tables.y} draw.bottom=${L.draw.bottom}`);
+
         // side by side while there is room, stacked once there is not
         await b.setViewport(1000, 900);
         await b.load(b.appUrl());
-        let L = await b.evaluate(LAYOUT);
+        L = await b.evaluate(LAYOUT);
         r.check('1000px: drawing sits beside the form', L.draw.x > L.form.right - 1, `form.right=${L.form.right} draw.x=${L.draw.x}`);
         r.check('1000px: downloads sits beside the drawing', L.dl.x > L.draw.right - 1, `draw.right=${L.draw.right} dl.x=${L.dl.x}`);
 

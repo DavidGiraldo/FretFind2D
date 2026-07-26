@@ -126,13 +126,38 @@ span.unit {
 
 /* Breakpoints come from the content, not from device classes.
 
-   Wide: the drawing stays put while the fret table scrolls past it. Only worth
-   it above 1400px, where the table shares that row and there are a couple of
-   thousand pixels of travel; below that it would gain about 40px. */
+   Wide: the results move into the fourth column instead of a row of their own.
+   The left-hand columns are a fixed 800px (16 margin + 400 form + 200 drawing +
+   154 downloads + three 10px gaps), so 1400px is where 600px is left over --
+   enough for the Neck and Strings tables (577 and 590) to show whole, with only
+   the fret table scrolling inside its box.
+
+   The fourth track stays `1fr` rather than minmax(600px, 1fr) on purpose: 1fr
+   takes exactly what is left, so it can never push the page into horizontal
+   overflow. The breakpoint is what guarantees the 600px, not a track minimum.
+
+   Bounding the pane's height is what the sticky drawing was reaching for and got
+   wrong: the form and the fretboard stay put and legible while only the numbers
+   scroll, with nothing overlapping anything.
+
+   The subtrahend is the distance from the top of the document to the top of this
+   column, which is not constant: measured 118px on wide screens and 136px at
+   1400px, where the intro paragraph wraps onto one more line. 150 is the larger
+   of those plus slack, so the pane never runs past the fold at any width or font
+   size -- it just leaves a little space beneath on wide screens. */
 @media (min-width: 1400px) {
-    #diagram {
-        position: sticky;
-        top: 10px;
+    #tables {
+        grid-column: 4;
+        max-height: calc(100vh - 150px);
+        overflow: auto;
+    }
+}
+
+/* Printing must not clip the numbers to one screenful. */
+@media print {
+    #tables {
+        max-height: none;
+        overflow: visible;
     }
 }
 
