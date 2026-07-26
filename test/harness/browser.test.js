@@ -302,6 +302,108 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
             r.check(`${name} produces output in mm`, typeof size === 'number' && size > 100, size);
         }
 
+        // --------------------------------------------------------------- layout
+        //
+        // The reported complaint: at some widths the results table landed tucked
+        // under the 800px-tall drawing. Below ~907px the page also scrolled
+        // sideways, dragging the form off screen to read the table.
+
+        const LAYOUT = `(function(){
+            var rect = function(sel){
+                var e = document.querySelector(sel);
+                if (!e) { return null; }
+                var b = e.getBoundingClientRect();
+                return {x: Math.round(b.left), y: Math.round(b.top),
+                        w: Math.round(b.width), h: Math.round(b.height),
+                        right: Math.round(b.right), bottom: Math.round(b.bottom)};
+            };
+            var svg = document.querySelector('#diagram svg');
+            var ink = svg ? svg.getBBox() : null;
+            var attrW = svg ? parseFloat(svg.getAttribute('width')) : 0;
+            var attrH = svg ? parseFloat(svg.getAttribute('height')) : 0;
+            return {
+                compat: document.compatMode,
+                form: rect('#worksheet'), draw: rect('#diagram'),
+                dl: rect('#downloads'), tables: rect('#tables'),
+                pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+                tablesScrolls: (function(){ var t = document.getElementById('tables');
+                    return t.scrollWidth > t.clientWidth; })(),
+                // no viewBox and inline overflow:hidden on the canvas, so a
+                // stylesheet width would CROP the fretboard rather than scale it
+                inkFits: ink ? (ink.x + ink.width <= attrW + 1 && ink.y + ink.height <= attrH + 1) : null,
+                inkSize: ink ? Math.round(ink.width) + 'x' + Math.round(ink.height) : null
+            };
+        })()`;
+
+        // the mode is a deliberate choice: grid works in quirks mode, and adding
+        // a doctype would widen every text input by 8px for no layout benefit
+        await b.load(b.appUrl());
+        r.check('the document stays in quirks mode on purpose',
+            await b.evaluate('document.compatMode') === 'BackCompat', await b.evaluate('document.compatMode'));
+
+        // Widths chosen from a float sweep of the old layout, one per way it went
+        // wrong: 1920 put the table in a 4th column, 1850 alongside the downloads
+        // at mid height, and 1650 indented into the drawing's own column at
+        // x=408 -- the band the original report came from.
+        for (const width of [1920, 1850, 1650, 1000, 620, 480, 360]) {
+            await b.setViewport(width, 900);
+            await b.load(b.appUrl());
+            const L = await b.evaluate(LAYOUT);
+            // The original complaint. "Below the drawing" is not enough on its
+            // own: with floats at 1650 the table's top equalled the drawing's
+            // bottom exactly, while sitting indented in its column. What makes it
+            // a real row of its own is starting at the content's left edge.
+            r.check(`${width}px: the results are a full-width row of their own`,
+                L.tables.x <= L.form.x + 1 && L.tables.y >= L.draw.bottom,
+                `tables.x=${L.tables.x} form.x=${L.form.x} tables.y=${L.tables.y} draw.bottom=${L.draw.bottom}`);
+            r.check(`${width}px: the page does not scroll sideways`, L.pageOverflow <= 0, L.pageOverflow);
+            // the check the stroke assertion cannot make: it stays green even
+            // when css has cropped the drawing
+            r.check(`${width}px: the drawing is not clipped`, L.inkFits === true, L.inkSize);
+            r.check(`${width}px: the drawing keeps its 200px canvas`, L.draw.w >= 200, L.draw.w);
+        }
+
+        // side by side while there is room, stacked once there is not
+        await b.setViewport(1000, 900);
+        await b.load(b.appUrl());
+        let L = await b.evaluate(LAYOUT);
+        r.check('1000px: drawing sits beside the form', L.draw.x > L.form.right - 1, `form.right=${L.form.right} draw.x=${L.draw.x}`);
+        r.check('1000px: downloads sits beside the drawing', L.dl.x > L.draw.right - 1, `draw.right=${L.draw.right} dl.x=${L.dl.x}`);
+
+        await b.setViewport(620, 900);
+        await b.load(b.appUrl());
+        L = await b.evaluate(LAYOUT);
+        r.check('620px: drawing still beside the form', L.draw.x > L.form.right - 1, `form.right=${L.form.right} draw.x=${L.draw.x}`);
+        r.check('620px: downloads moved under the drawing', L.dl.y >= L.draw.bottom && L.dl.x > L.form.right - 1,
+            `dl=${L.dl.x},${L.dl.y} draw.bottom=${L.draw.bottom}`);
+
+        await b.setViewport(480, 900);
+        await b.load(b.appUrl());
+        L = await b.evaluate(LAYOUT);
+        r.check('480px: the drawing stacks under the form', L.draw.y >= L.form.bottom,
+            `form.bottom=${L.form.bottom} draw.y=${L.draw.y}`);
+        // justify-self:center, so it is centred in the column rather than flush left
+        r.check('480px: and is centred, not flush against the edge',
+            Math.abs((L.draw.x - L.form.x) - (L.form.right - L.draw.right)) < 4,
+            `left gap=${L.draw.x - L.form.x} right gap=${L.form.right - L.draw.right}`);
+
+        // the wide table has to be scrolling inside its own box by now
+        await b.setViewport(700, 900);
+        await b.load(b.appUrl());
+        L = await b.evaluate(LAYOUT);
+        r.check('700px: the fret table scrolls inside its own box', L.tablesScrolls === true);
+        r.check('700px: and the page still does not', L.pageOverflow <= 0, L.pageOverflow);
+
+        // a help panel holding a <pre> must not widen the page either
+        await b.setViewport(480, 900);
+        await b.load(b.appUrl());
+        await b.evaluate("$('#multiple').click()");
+        await b.evaluate("$('#worksheet a.help').each(function(){ $(this).click(); })");
+        L = await b.evaluate(LAYOUT);
+        r.check('480px: open help panels do not widen the page', L.pageOverflow <= 0, L.pageOverflow);
+
+        await b.setViewport(1400, 900);
+
         // ------------------------------------------------------------------ pdf
         //
         // The point of the PDF output is printing at true physical size, so the

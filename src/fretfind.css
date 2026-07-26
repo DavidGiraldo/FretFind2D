@@ -5,18 +5,54 @@ body {
 td {
     vertical-align: top;
     }
-#worksheet {
-    float: left;
-    width: 400px;
+/* The four regions used to be float:left siblings. Nothing cleared them, so the
+   results table landed wherever float packing put it -- measured at 1560-1607px
+   wide it sat directly under the 800px-tall drawing with a 400x3079 dead column
+   beside it, and below 907px the whole document scrolled sideways because a
+   float cannot shrink under the fret table's 899px min-content.
+
+   A grid on #fretfind fixes both without touching the markup. Auto-placement
+   follows the existing DOM order, so the columns need no named areas: the two
+   full-width regions just span every column. #errors is display:none most of
+   the time, and a display:none element is not a grid item at all, so it costs
+   no phantom row and no gap. */
+/* The form is capped at the 400px it was designed for: its controls are ~400px
+   of content, so letting it stretch to fill a wide window just spreads the
+   labels out. It shrinks below that when it has to (down to 300), which is what
+   keeps the drawing beside it for longer. The trailing empty 1fr soaks up the
+   slack on wide screens, and the results row spans every column so it still
+   gets the whole width to itself. */
+#fretfind {
+    display: grid;
+    grid-template-columns: minmax(300px, 400px) 200px max-content 1fr;
+    align-items: start;
+    gap: 10px;
 }
-#diagram {
-    float: left;
-}
-#downloads {
-	float: left;
-}
+#errors,
 #tables {
-    float: left;
+    grid-column: 1 / -1;
+}
+/* The drawing is deliberately NOT fluid. Its ink measures 74x800 at canvas
+   widths of 120, 200 and 600: it is limited by height, so a wider column buys
+   nothing. Worse, the canvas has no viewBox and carries inline overflow:hidden,
+   so any stylesheet width/height on it crops the fretboard instead of scaling
+   it -- and drawGuitar reads parseInt(paper.canvas.style.width), which happily
+   eats '100%' as 100. Leave its size to Raphael. */
+#diagram {
+    justify-self: center;
+}
+/* The fret table is 11 columns of long decimals: 1144px at max-content and it
+   will not go below 899. Scrolling it inside its own box is what stops it
+   dragging the whole page sideways. */
+#tables {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+}
+/* Two help panels hold preformatted tables 34 monospace characters wide that
+   cannot wrap; without this, opening one widens the entire page. */
+dd.help pre {
+    overflow-x: auto;
 }
 p.dev {
     clear: both;
@@ -86,4 +122,47 @@ span.unit {
   color: red;
   font-weight: bold;
   text-transform: uppercase;
+}
+
+/* Breakpoints come from the content, not from device classes.
+
+   Wide: the drawing stays put while the fret table scrolls past it. Only worth
+   it above 1400px, where the table shares that row and there are a couple of
+   thousand pixels of travel; below that it would gain about 40px. */
+@media (min-width: 1400px) {
+    #diagram {
+        position: sticky;
+        top: 10px;
+    }
+}
+
+/* 300 (form) + 200 (drawing) + 154 (downloads) + two 10px gaps = 674, so three
+   columns stop fitting a little under 700. Below that the downloads column
+   moves beneath the drawing, keeping "look at it" and "export it" together. */
+@media (max-width: 699px) {
+    #fretfind {
+        grid-template-columns: minmax(0, 1fr) 200px;
+    }
+    #worksheet {
+        grid-column: 1;
+        grid-row: span 2;
+    }
+    #diagram,
+    #downloads {
+        grid-column: 2;
+    }
+}
+
+/* 200 for the drawing plus a gap leaves too little for the form to be usable,
+   so this is the floor for keeping them side by side: one column below it. */
+@media (max-width: 539px) {
+    #fretfind {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    #worksheet,
+    #diagram,
+    #downloads {
+        grid-column: 1;
+        grid-row: auto;
+    }
 }

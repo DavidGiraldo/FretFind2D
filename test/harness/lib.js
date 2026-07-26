@@ -247,6 +247,15 @@ async function openBrowser({ port, cdpPort }) {
 
     const appUrl = hash => `http://127.0.0.1:${port}/src/fretfind.html` + (hash || '');
 
+    // Chrome is launched at one fixed size, so without this nothing in the suite
+    // ever crosses a media query. Note --hide-scrollbars is on, so this measures
+    // layout without scrollbar reflow.
+    async function setViewport(width, height) {
+        await send('Emulation.setDeviceMetricsOverride', {
+            width, height, deviceScaleFactor: 1, mobile: false,
+        });
+    }
+
     // Waits for Chrome's own "this download finished" signal and hands back the
     // path it wrote. Watching the directory instead is unreliable: the file is
     // created before it is filled, and an unrelated stray .crdownload in the same
@@ -269,7 +278,7 @@ async function openBrowser({ port, cdpPort }) {
     }
 
     return {
-        evaluate, load, appUrl, send, download,
+        evaluate, load, appUrl, send, download, setViewport,
         url: p => `http://127.0.0.1:${port}${p}`,
         async close() {
             try { ws.close(); } catch { /* already gone */ }
