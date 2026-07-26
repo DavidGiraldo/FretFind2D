@@ -126,45 +126,38 @@ span.unit {
 
 /* Breakpoints come from the content, not from device classes.
 
-   Wide: the results move into the fourth column instead of a row of their own.
-   The left-hand columns are a fixed 800px (16 margin + 400 form + 200 drawing +
-   154 downloads + three 10px gaps), so 1400px is where 600px is left over --
-   enough for the Neck and Strings tables (577 and 590) to show whole, with only
-   the fret table scrolling inside its box.
+   Wide: the results start directly beneath the downloads and share their column,
+   so the right-hand side reads top to bottom as export-then-numbers while the
+   form and the fretboard keep the left. The form and the drawing span both rows.
 
-   The fourth track stays `1fr` rather than minmax(600px, 1fr) on purpose: 1fr
-   takes exactly what is left, so it can never push the page into horizontal
-   overflow. The breakpoint is what guarantees the 600px, not a track minimum.
+   The third track is `1fr`, so it takes exactly what is left and can never push
+   the page into horizontal overflow. What guarantees the room is the breakpoint:
+   the columns to its left are a fixed 626px (16 margin + 400 form + 200 drawing +
+   two 10px gaps), so at 1400px the results get ~774px -- the Neck and Strings
+   tables (577 and 590) fit whole and only the fret table scrolls inside its box.
 
-   Bounding the pane's height is what the sticky drawing was reaching for and got
-   wrong: the form and the fretboard stay put and legible while only the numbers
-   scroll, with nothing overlapping anything.
-
-   The subtrahend is the distance from the top of the document to the top of this
-   column, which is not constant: measured 118px on wide screens and 136px at
-   1400px, where the intro paragraph wraps onto one more line. 150 is the larger
-   of those plus slack, so the pane never runs past the fold at any width or font
-   size -- it just leaves a little space beneath on wide screens. */
+   The page is deliberately left to grow downwards: the results scroll with it
+   rather than inside a pane of their own, whichever side they are on. */
 @media (min-width: 1400px) {
+    #fretfind {
+        grid-template-columns: minmax(300px, 400px) 200px 1fr;
+    }
+    #worksheet,
+    #diagram {
+        grid-row: span 2;
+    }
     #tables {
-        grid-column: 4;
-        max-height: calc(100vh - 150px);
-        overflow: auto;
+        grid-column: 3;
     }
 }
 
-/* Printing must not clip the numbers to one screenful. */
-@media print {
-    #tables {
-        max-height: none;
-        overflow: visible;
-    }
-}
-
-/* 300 (form) + 200 (drawing) + 154 (downloads) + two 10px gaps = 674, so three
-   columns stop fitting a little under 700. Below that the downloads column
-   moves beneath the drawing, keeping "look at it" and "export it" together. */
-@media (max-width: 699px) {
+/* 300 (form at its narrowest) + 200 (drawing) + 154 (downloads) + two 10px gaps
+   + 16 of body margin = 700 of layout width. A vertical scrollbar takes ~15 of
+   that, which is why this switches at 719 rather than 699: measured at a 700px
+   viewport the three columns overflowed by 7px once the scrollbar was real.
+   Below it the downloads move beneath the drawing, keeping "look at it" and
+   "export it" together. */
+@media (max-width: 719px) {
     #fretfind {
         grid-template-columns: minmax(0, 1fr) 200px;
     }

@@ -166,8 +166,11 @@ async function openBrowser({ port, cdpPort }) {
     const server = serve(port);
     const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'fretfind-test-'));
     const chrome = spawn(findChrome(), [
+        // scrollbars are deliberately NOT hidden: hiding them makes
+        // scrollbar-induced reflow invisible, which masked a real 7px horizontal
+        // overflow at a 700px viewport
         '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-        '--hide-scrollbars', '--window-size=1400,900',
+        '--window-size=1400,900',
         '--remote-debugging-port=' + cdpPort, '--user-data-dir=' + profile, 'about:blank',
     ], { stdio: 'ignore' });
 

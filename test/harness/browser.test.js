@@ -345,7 +345,9 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
         // wrong: 1920 put the table in a 4th column, 1850 alongside the downloads
         // at mid height, and 1650 indented into the drawing's own column at
         // x=408 -- the band the original report came from.
-        for (const width of [1920, 1850, 1650, 1000, 620, 480, 360]) {
+        // 720 and 700 straddle the three-to-two column switch, which is where a
+        // real vertical scrollbar used to cost 7px of horizontal overflow.
+        for (const width of [1920, 1850, 1650, 1000, 720, 700, 620, 480, 360]) {
             await b.setViewport(width, 900);
             await b.load(b.appUrl());
             const L = await b.evaluate(LAYOUT);
@@ -353,21 +355,25 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
             // own: with floats at 1650 the table's top equalled the drawing's
             // bottom exactly, while sitting indented in its column. What makes it
             // a real row of its own is starting at the content's left edge.
-            // There are two legitimate placements and one broken family. Either
-            // the results are the fourth column, starting clear of everything to
-            // their left, or they are a full-width row starting at the content's
-            // left edge. What the floats did was neither: at 1850 the table sat
-            // on top of the downloads column (x=608 < dl.right=762) and at 1650
-            // it was indented into the drawing's own column (x=408, with its top
-            // exactly the drawing's bottom).
-            const inRightColumn = L.tables.y < L.draw.bottom;
-            const placed = inRightColumn
-                ? L.tables.x >= L.dl.right
-                : L.tables.x <= L.form.x + 1;
-            r.check(`${width}px: the results sit in the right column or in a row of their own`,
+            // Two legitimate placements, decided by the breakpoint. Wide: the
+            // results share the downloads' column, starting below them and clear
+            // of the drawing. Narrow: a full-width row at the content's left edge.
+            //
+            // Checked against the earlier float sweep, this still rejects 1650 --
+            // the width from the original report, where the table was indented
+            // into the drawing's own column at x=408 while overlapping it
+            // vertically -- and 1920, where it was top-aligned in a fourth column
+            // instead of under the downloads. Note 1850 (x=608, just below the
+            // downloads) passes, because that float accident is in fact the
+            // arrangement now being asked for.
+            const wide = width >= 1400;
+            const placed = wide
+                ? (L.tables.x >= L.draw.right && L.tables.y >= L.dl.bottom)
+                : (L.tables.x <= L.form.x + 1 && L.tables.y >= L.draw.bottom);
+            r.check(`${width}px: the results are ${wide ? 'under the downloads, clear of the drawing' : 'a full-width row of their own'}`,
                 placed,
-                `${inRightColumn ? 'right column' : 'own row'}: tables.x=${L.tables.x} ` +
-                `form.x=${L.form.x} dl.right=${L.dl.right} tables.y=${L.tables.y} draw.bottom=${L.draw.bottom}`);
+                `tables=${L.tables.x},${L.tables.y} draw.right=${L.draw.right} ` +
+                `dl.bottom=${L.dl.bottom} form.x=${L.form.x} draw.bottom=${L.draw.bottom}`);
             // sticky was tried on the drawing and was a mistake: 800px tall, it
             // scrolled over the tables and neither was legible. Pin it down.
             r.check(`${width}px: the drawing is not sticky`,
@@ -379,26 +385,35 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
             r.check(`${width}px: the drawing keeps its 200px canvas`, L.draw.w >= 200, L.draw.w);
         }
 
-        // Above the breakpoint the results become the fourth column, bounded to
-        // one screenful so the form and the fretboard stay put while only the
-        // numbers scroll. That is what the sticky drawing was for, done right.
+        // Above the breakpoint the results continue the downloads column: they
+        // start at its left edge, directly beneath it.
         await b.setViewport(1600, 900);
         await b.load(b.appUrl());
         let L = await b.evaluate(LAYOUT);
-        r.check('1600px: results are the fourth column, top-aligned with the form',
-            L.tables.x >= L.dl.right && Math.abs(L.tables.y - L.form.y) < 40,
-            `tables=${L.tables.x},${L.tables.y} dl.right=${L.dl.right} form.y=${L.form.y}`);
+        r.check('1600px: results share the downloads column',
+            Math.abs(L.tables.x - L.dl.x) < 4, `tables.x=${L.tables.x} dl.x=${L.dl.x}`);
+        r.check('1600px: and start just below them',
+            L.tables.y >= L.dl.bottom && L.tables.y - L.dl.bottom < 40,
+            `tables.y=${L.tables.y} dl.bottom=${L.dl.bottom}`);
+        r.check('1600px: the form and the drawing still hold the left',
+            L.form.x < L.draw.x && L.draw.right <= L.tables.x,
+            `form.x=${L.form.x} draw=${L.draw.x}-${L.draw.right} tables.x=${L.tables.x}`);
+        // No bounded pane: the page grows and the results scroll with it.
+        // Note computed overflow-y reads 'auto' whatever we do -- per spec, a
+        // 'visible' value on one axis computes to 'auto' when the other axis is
+        // not visible, and overflow-x:auto is needed for the wide fret table. So
+        // what proves there is no pane is the absence of max-height plus the
+        // element having nothing to scroll vertically.
         const pane = await b.evaluate(`(function(){
             var t = document.getElementById('tables');
-            return {fits: t.getBoundingClientRect().bottom <= window.innerHeight,
-                    scrolls: t.scrollHeight > t.clientHeight,
-                    docH: Math.round(document.documentElement.scrollHeight),
-                    vh: window.innerHeight};
+            return {maxH: getComputedStyle(t).maxHeight,
+                    vScroll: t.scrollHeight > t.clientHeight + 1,
+                    docH: Math.round(document.documentElement.scrollHeight)};
         })()`);
-        r.check('1600px: the pane ends within the window', pane.fits === true, `bottom vs ${pane.vh}`);
-        r.check('1600px: and scrolls internally instead', pane.scrolls === true);
-        // the tables are ~3400px tall; unbounded they made the page that long
-        r.check('1600px: the page is no longer thousands of pixels tall', pane.docH < 1600, pane.docH);
+        r.check('1600px: the results are not boxed into a scrolling pane',
+            pane.maxH === 'none' && pane.vScroll === false,
+            `max-height=${pane.maxH} scrolls vertically=${pane.vScroll}`);
+        r.check('1600px: the page grows to fit them instead', pane.docH > 3000, pane.docH);
 
         // one pixel below the breakpoint it must flip back to a full-width row
         await b.setViewport(1399, 900);
