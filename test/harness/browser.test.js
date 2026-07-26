@@ -4,7 +4,10 @@
 //   node test/harness/browser.test.js
 'use strict';
 
-const { createReport, openBrowser } = require('./lib.js');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { createReport, openBrowser, sleep } = require('./lib.js');
 
 const PORT = 8231;
 const CDP_PORT = 9231;
@@ -206,6 +209,53 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
         for (const [name, size] of Object.entries(writers || {})) {
             r.check(`${name} produces output in mm`, typeof size === 'number' && size > 100, size);
         }
+
+        // ------------------------------------------------------------- downloads
+        //
+        // The one path with no other coverage: Blob construction, FileSaver, and
+        // the click handlers. Downloads are captured to a temp directory so the
+        // bytes that would reach disk can actually be inspected.
+
+        const downloads = fs.mkdtempSync(path.join(os.tmpdir(), 'fretfind-dl-'));
+        await b.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads, eventsEnabled: true });
+        await b.load(b.appUrl());
+        const buttons = [
+            ['download_dxf', 'fretboard.dxf', '999'],
+            ['download_svg', 'fretboard.svg', '<svg'],
+            ['download_csv', 'fretboard.csv', '"Midline"'],
+            ['download_tab', 'fretboard.tab', 'Midline'],
+            ['download_html', 'fretboard.html', '<html>'],
+            ['download_pdf', 'fretboard.pdf', '%PDF-'],
+            ['download_pdfm', 'fretboard.pdf', '%PDF-'],
+        ];
+        // Chrome creates the file and then fills it, so a download is only done
+        // once it is non-empty and its size has stopped changing. Reading as soon
+        // as the name appears yields zero bytes and leaks into the next button.
+        const settledDownload = async () => {
+            let last = -1;
+            for (let i = 0; i < 60; i++) {
+                await sleep(150);
+                const files = fs.readdirSync(downloads).filter(f => !f.endsWith('.crdownload'));
+                if (!files.length) continue;
+                const file = path.join(downloads, files[0]);
+                const size = fs.statSync(file).size;
+                if (size > 0 && size === last) return file;
+                last = size;
+            }
+            return null;
+        };
+        for (const [id, filename, magic] of buttons) {
+            for (const f of fs.readdirSync(downloads)) fs.rmSync(path.join(downloads, f), { force: true });
+            r.check(`${id} button exists`, await b.evaluate(`document.querySelectorAll('#${id}').length`) === 1);
+            await b.evaluate(`document.getElementById('${id}').click()`);
+            const saved = await settledDownload();
+            if (!saved) { r.check(`${id} writes ${filename}`, false, 'no file appeared'); continue; }
+            const head = fs.readFileSync(saved).subarray(0, 16).toString('latin1');
+            const size = fs.statSync(saved).size;
+            r.check(`${id} writes a non-trivial ${filename}`, size > 500, size + ' bytes');
+            r.check(`${id} content starts with ${JSON.stringify(magic)}`, head.startsWith(magic), JSON.stringify(head));
+        }
+        fs.rmSync(downloads, { recursive: true, force: true });
 
         // --------------------------------------------------------------- geom.html
 
