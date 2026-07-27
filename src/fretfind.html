@@ -437,19 +437,44 @@ var frettedGuitarForDownload = function() {
     return ff.fretGuitar(guitar);
 };
 
+// Where the design is kept between visits. localStorage is scoped to the origin
+// and not to the path, and github pages serves every acspike project from the one
+// acspike.github.io, so an unprefixed key would collide with its neighbours.
+var STORAGE_KEY = 'fretfind2d.design';
+
 var processChanges = false;
+// Sibling of processChanges, and it has to be declared out here: onChange is
+// defined outside $(document).ready and cannot close over a binding made inside it.
+// It stays false for the whole of initialization, so the render that restores a
+// design never writes that design straight back. Opening someone's permalink
+// therefore leaves the reader's own saved design alone; editing a single field arms
+// persistence for the rest of the session.
+var persistChanges = false;
 var onChange = function() {
     if (processChanges) {
         var guitar = getGuitar();
         var problems = guitar.scale.errorstrings.concat(validateGuitar(guitar));
         showErrors(problems);
+        //above the early return deliberately: a form the user has just broken is
+        //exactly when reset is worth reaching for, and anywhere below this line the
+        //button would stay greyed out until they repaired the field by hand
+        if (persistChanges) { $('#reset').prop('disabled', false); }
         //fretting NaN geometry yields a blank diagram and a table full of NaN,
         //so report the problem and leave the last good drawing on screen
         if (problems.length > 0) { return; }
         guitar = ff.fretGuitar(guitar);
         ff.drawGuitar(paper, guitar, getDisplayOptions());
         $('#tables').html(ff.getTable(guitar, guitar.units));
-        $('#bookmark').attr('href', getLink());
+        //one serialization feeds both the permalink and the saved copy
+        var link = getLink();
+        $('#bookmark').attr('href', link);
+        //below the early return, so a form that does not describe a fretboard is
+        //never what comes back on the next visit. the write can throw on a full
+        //quota or in private browsing, and an exception escaping from here would
+        //abort the redraw that just happened above it
+        if (persistChanges) {
+            try { window.localStorage.setItem(STORAGE_KEY, link); } catch (e) {}
+        }
     }
 };
 
@@ -479,8 +504,14 @@ var clickAlt = function(groupId, id) {
     }
 };
 
-var updateFormFromHash = function() {
-    var params = ff.deparamFragment(window.location.hash);
+// Restores a serialized design. The fragment arrives as an argument rather than
+// being read from window.location here, because it has two possible sources now:
+// the url the visitor arrived on, or the copy saved in localStorage. Both are the
+// same format -- what getLink() writes -- so both come back through this one path
+// and inherit its sanitizing (safeNumber inside the setters, clickAlt for the tabs,
+// and the null-prototype object deparamFragment returns).
+var updateFormFromHash = function(fragment) {
+    var params = ff.deparamFragment(fragment);
     //the values in the link are already expressed in the link's unit, so adopt that
     //unit before restoring anything. this is what stops the radio click below from
     //converting values that are already correct.
@@ -541,10 +572,39 @@ $(document).ready(function() {
     setLengths('ilengths','numStrings', onChange);
     setGauges('igauges', 'numStrings', onChange);
     paper = Raphael('diagram',200,800);
-    updateFormFromHash();
+    //a permalink always wins. someone who is sent a design has to see that design,
+    //not whatever this browser happens to have kept, or sharing a link would be
+    //broken. only when there is no fragment does the saved copy get a turn.
+    //reading it can throw outright -- chrome throws on the property access itself
+    //when cookies are blocked -- so any failure is treated as "nothing saved" and
+    //the page carries on exactly as it did before it ever stored anything.
+    var fragment = window.location.hash;
+    if (!fragment || fragment === '#') {
+        try { fragment = window.localStorage.getItem(STORAGE_KEY) || ''; } catch (e) { fragment = ''; }
+    }
+    updateFormFromHash(fragment);
     processChanges = true;
     updateUnitLabels(currentUnits);
+    //there is something to reset when a design came from somewhere: a link, or the
+    //store. a first visit has neither, so the button starts inert and onChange arms
+    //it on the first edit.
+    $('#reset').prop('disabled', !fragment);
     onChange();
+    //this render restored a design; it must not write it straight back. every
+    //onChange after it comes from the visitor actually changing something.
+    persistChanges = true;
+
+    //clears the saved design and reloads clean. location.reload() cannot do this:
+    //it re-navigates to the current url *including* its fragment, which
+    //updateFormFromHash would then apply again on the way back up, so the design
+    //would survive its own reset. assigning href and calling reload after it races
+    //two navigations instead. replace() to a url with no fragment cannot take the
+    //same-document shortcut, so it is a genuine document load, and it leaves no
+    //history entry pointing back at what was just discarded.
+    $('#reset').click(function(){
+        try { window.localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+        window.location.replace(window.location.toString().replace(/#.*/,''));
+    });
 
     var isFileSaverSupported = false;
     try {
@@ -1012,6 +1072,14 @@ Fret  P.D.    Fret  P.D.
     <div id="diagram"><!-- --></div>
     <dl id="downloads">
         <dt>Link</dt><dd><a href="#" id="bookmark">Link to this design</a></dd>
+        <!-- Static, not appended from ready() like the download buttons: those are
+             added after the first onChange has already run, and the whole block is
+             replaced by prose when Blob is missing. This row has to exist before any
+             of that and on every browser. The label is short and the long wording
+             lives in the dt and the title, because the downloads column is a
+             max-content grid track and the 719px breakpoint was measured with it at
+             154px, with no slack to give away. -->
+        <dt>Defaults</dt><dd><button id="reset" disabled="disabled" title="Reset to defaults">Reset</button></dd>
     </dl>
     <div id="tables"><!-- --></div>
 </div>

@@ -7,7 +7,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createReport, openBrowser } = require('./lib.js');
+const { createReport, openBrowser, sleep } = require('./lib.js');
 
 const PORT = 8231;
 const CDP_PORT = 9231;
@@ -21,6 +21,21 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
     const b = await openBrowser({ port: PORT, cdpPort: CDP_PORT });
     const noErrors = async () => JSON.stringify(await b.evaluate('window.__errs')) === '[]';
     const errs = async () => JSON.stringify(await b.evaluate('window.__errs'));
+
+    // The page saves the current design to localStorage, and the whole suite runs in
+    // one Chrome profile against one origin, so without this a design left behind by
+    // any case is restored by every later fragment-less load. That is not
+    // hypothetical: the multipage PDF case sets a 2in design and the very next load
+    // asserts a page count that only holds for the default 25in one.
+    //
+    // Registered separately from the error collector in lib.js rather than folded
+    // into it, because the persistence cases below need to remove this one and
+    // removing them together would take window.__errs with it and break every
+    // noErrors() assertion. The try/catch is needed because the injection also runs
+    // on the about:blank hop inside load().
+    const clearing = await b.send('Page.addScriptToEvaluateOnNewDocument', {
+        source: 'try{localStorage.clear()}catch(e){}',
+    });
 
     try {
         // ------------------------------------------------------------- units
@@ -575,6 +590,119 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
         const geom = await b.evaluate("JSON.stringify({good:document.querySelectorAll('.good').length,bad:document.querySelectorAll('.bad').length})");
         const g = JSON.parse(geom);
         r.check(`geom.html: ${g.good} green, ${g.bad} red`, g.bad === 0 && g.good === 27, geom);
+
+        // ------------------------------------------------------- saved design
+        //
+        // Last on purpose: these are the only cases that want localStorage to
+        // survive a load, so the suite-wide clearing above comes off here and
+        // nothing after them depends on it.
+
+        await b.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: clearing.identifier });
+
+        const stored = "String(localStorage.getItem('fretfind2d.design'))";
+        const empty = "localStorage.getItem('fretfind2d.design')===null";
+        const resetOff = "document.getElementById('reset').disabled";
+        // load() cannot be used to wait out a navigation the page starts itself,
+        // so the reset cases poll for the same readiness condition by hand.
+        const settle = async () => {
+            for (let i = 0; i < 120; i++) {
+                await sleep(100);
+                try {
+                    if (await b.evaluate("document.readyState==='complete' && !!window.ff && " +
+                        "($('#tables').find('table').length>0 || $('#errors').css('display')==='block')") === true) return true;
+                } catch { /* execution context swaps mid-navigation */ }
+            }
+            return false;
+        };
+
+        await b.load(b.appUrl());
+        await b.evaluate('localStorage.clear()');
+        await b.load(b.appUrl());
+        r.check('a first visit saves nothing', await b.evaluate(empty) === true, await b.evaluate(stored));
+        r.check('and reset starts disabled', await b.evaluate(resetOff) === true);
+
+        // the pin for putting the enable ABOVE onChange's early return: this state
+        // never reaches the code below it, and it is when reset matters most
+        await b.evaluate("$('#len').val('').change()");
+        r.check('an invalid design still shows its error', await b.evaluate("$('#errors').css('display')") === 'block');
+        r.check('and reset is reachable from it', await b.evaluate(resetOff) === false);
+        r.check('but an invalid design is not saved', await b.evaluate(empty) === true, await b.evaluate(stored));
+
+        await b.load(b.appUrl());
+        await b.evaluate("$('#len').val('700').change()");
+        r.check('editing saves the design', await b.evaluate(`${stored}.indexOf('len=700')>-1`) === true, await b.evaluate(stored));
+        r.check('and enables reset', await b.evaluate(resetOff) === false);
+
+        await b.load(b.appUrl());
+        r.check('reopening restores it', await b.evaluate("$('#len').val()") === '700', await b.evaluate("$('#len').val()"));
+        r.check('reset is enabled for a restored design', await b.evaluate(resetOff) === false);
+
+        // a permalink has to beat the saved copy, or being sent a design is broken
+        await b.load(b.appUrl('#len=650'));
+        r.check('a permalink wins over the saved design', await b.evaluate("$('#len').val()") === '650', await b.evaluate("$('#len').val()"));
+        r.check('and opening it does not overwrite what was saved',
+            await b.evaluate(`${stored}.indexOf('len=700')>-1`) === true, await b.evaluate(stored));
+
+        // the saved values are already in the saved unit; converting them again on
+        // restore is the documented hazard this guards
+        await b.load(b.appUrl());
+        await b.evaluate("localStorage.clear();document.querySelector(\"input[name='units'][value='mm']\").click()");
+        await b.evaluate("$('#len').val('700').change()");
+        await b.load(b.appUrl());
+        r.check('a saved design keeps its unit', await b.evaluate("$(\"input:checked[name='units']\").val()") === 'mm');
+        r.check('and is not converted a second time',
+            await b.evaluate("$('#len').val()==='700' && $('#nutWidth').val()==='34.925'"),
+            await b.evaluate("$('#len').val()+' / '+$('#nutWidth').val()"));
+
+        // the per-string rows are regenerated markup, restored from the il/ig/t arrays
+        await b.evaluate("$('#numStrings').val('8').change()");
+        await b.load(b.appUrl());
+        r.check('a saved string count rebuilds its per-string rows',
+            await b.evaluate("$('#ilengths > input').length===8 && ff.getTuning('tuning').length===8"),
+            await b.evaluate("$('#ilengths > input').length+' / '+ff.getTuning('tuning').length"));
+
+        // reset, from both kinds of url. the one with a fragment is the case
+        // location.reload() would silently fail to reset
+        for (const [label, url] of [['no fragment', b.appUrl()], ['a permalink', b.appUrl('#len=700&u=mm')]]) {
+            await b.load(url);
+            await b.evaluate("$('#nutWidth').val('1.5').change()");
+            await b.evaluate("document.getElementById('reset').click()");
+            const ready = await settle();
+            r.check(`reset from ${label} reloads the page`, ready);
+            r.check(`reset from ${label} restores the defaults`,
+                await b.evaluate("$('#len').val()==='25' && $(\"input:checked[name='units']\").val()==='in'"),
+                await b.evaluate("$('#len').val()+' / '+$(\"input:checked[name='units']\").val()"));
+            r.check(`reset from ${label} drops the fragment`, await b.evaluate('location.hash') === '');
+            r.check(`reset from ${label} clears the saved design`, await b.evaluate(empty) === true, await b.evaluate(stored));
+            r.check(`reset from ${label} leaves the button disabled`, await b.evaluate(resetOff) === true);
+        }
+
+        // storage can be missing entirely -- chrome throws on the property access
+        // itself when cookies are blocked -- and the page has to work exactly as it
+        // did before it ever saved anything
+        const breaking = await b.send('Page.addScriptToEvaluateOnNewDocument', {
+            source: "(function(){var t=function(){throw new Error('storage blocked');};" +
+                "try{Object.defineProperty(window,'localStorage',{configurable:true,get:t});}catch(e){}" +
+                "try{Object.defineProperty(Window.prototype,'localStorage',{configurable:true,get:t});}catch(e){}})();",
+        });
+        let reachedPage = true;
+        // an uncaught failure here escapes the try/finally and throws the whole
+        // report away before it is printed
+        try { await b.load(b.appUrl()); } catch (e) { reachedPage = false; }
+        r.check('the page still loads with no storage', reachedPage);
+        if (reachedPage) {
+            // assert the stub really bites first, or the three checks under it pass
+            // for the wrong reason
+            r.check('the storage stub really throws',
+                await b.evaluate("(function(){try{void localStorage;return 'ok';}catch(e){return 'THREW';}})()") === 'THREW');
+            r.check('it still draws its tables', await b.evaluate("$('#tables').find('table').length>0"));
+            r.check('with no uncaught error', await noErrors(), await errs());
+            await b.evaluate('window.__draws=0;var _d=ff.drawGuitar;ff.drawGuitar=function(){window.__draws++;return _d.apply(this,arguments);};');
+            await b.evaluate("$('#len').val('30').change()");
+            r.check('and editing still redraws exactly once', await b.evaluate('window.__draws') === 1, await b.evaluate('window.__draws'));
+            r.check('with the failing write swallowed', await noErrors(), await errs());
+        }
+        await b.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: breaking.identifier });
     } finally {
         await b.close();
     }
