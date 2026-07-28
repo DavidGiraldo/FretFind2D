@@ -317,6 +317,86 @@ const PAYLOAD = encodeURIComponent('"><img src=x onerror="window.__pwned=1">');
             r.check(`${name} produces output in mm`, typeof size === 'number' && size > 100, size);
         }
 
+        // ------------------------------------------------ the exported SVG on paper
+        //
+        // The exported file is printed at 1:1 and traced, so its line weight has to
+        // be absolute. Only a renderer can prove the browser reads the bare number
+        // as USER UNITS, and here one user unit is one millimetre because the
+        // viewBox equals the declared physical size.
+        //
+        // getComputedStyle is the instrument, not getBoundingClientRect: measured in
+        // this Chrome, the rect of an SVG path ignores the stroke completely -- a
+        // butt-capped and a round-capped line of the same 10-unit stroke report
+        // identical rects -- so a bbox-based ink measurement would pass vacuously.
+        // The computed value separates all three spellings cleanly:
+        //   0.352778    -> "0.352778px"   correct, one user unit = 1mm
+        //   0.352778mm  -> "1.33333px"    css resolves mm at 96dpi: 3.78x too thick
+        //   0.2%        -> "0.2%"         left unresolved, and scales with the board
+        const styled = await b.evaluate(`(function(){
+            var svg = ff.getSVG(ff.fretGuitar(getGuitar()), getDisplayOptions());
+            var host = document.createElement('div');
+            host.style.cssText = 'position:absolute;left:-9999px;top:0';
+            host.innerHTML = svg;
+            document.body.appendChild(host);
+            var pf = getComputedStyle(host.querySelector('path.pfret'));
+            var out = { width: pf.strokeWidth, cap: pf.strokeLinecap,
+                        rules: host.querySelector('style').sheet.cssRules.length };
+            document.body.removeChild(host);
+            return JSON.stringify(out);
+        })()`);
+        const st = JSON.parse(styled);
+        // compared as a number: chrome serializes computed lengths to six significant
+        // digits, so string equality would be brittle. The tolerance is far tighter
+        // than the 3.78x a css unit suffix would introduce.
+        const asUserUnits = s => (/px$/.test(String(s)) ? parseFloat(s) : NaN);
+        // if the stylesheet did not parse, everything below reports UA defaults
+        r.check('the exported stylesheet parses', st.rules === 6, st.rules);
+        r.check('a fret line is 1/72in of real width, not a share of the board size',
+            Math.abs(asUserUnits(st.width) - 0.352778) < 1e-4, st.width);
+        r.check('and carries no linecap, so it prints its true length',
+            st.cap === 'butt', st.cap);
+
+        // The other half of the same decision. With individual scale lengths every
+        // fret degenerates to a zero-length segment, and a zero-length subpath paints
+        // NOTHING unless its cap is round or square -- so the linecap .ifret carries
+        // is load-bearing, not decoration. isPointInStroke asks the renderer what is
+        // actually painted, which a bbox cannot: dropping that cap makes this fail
+        // rather than silently shipping an export with no frets on it.
+        const degenerate = await b.evaluate(`(function(){
+            var g = getGuitar();
+            g.strings[2] = new ff.Segment(new ff.Point(g.strings[2].end1.x, 17), g.strings[2].end2.copy());
+            var f = ff.fretGuitar(g);
+            if (f.doPartials) { return JSON.stringify({error: 'expected doPartials false'}); }
+            var host = document.createElement('div');
+            host.style.cssText = 'position:absolute;left:-9999px;top:0';
+            host.innerHTML = ff.getSVG(f, getDisplayOptions());
+            document.body.appendChild(host);
+            var svg = host.querySelector('svg');
+            var hit = null;
+            var paths = host.querySelectorAll('path.ifret');
+            for (var i = 0; i < paths.length; i++) {
+                var m = /^M([-\\d.eE+]+) ([-\\d.eE+]+)L([-\\d.eE+]+) ([-\\d.eE+]+)$/.exec(paths[i].getAttribute('d'));
+                if (m && m[1] === m[3] && m[2] === m[4]) {
+                    var pt = svg.createSVGPoint();
+                    pt.x = parseFloat(m[1]); pt.y = parseFloat(m[2]);
+                    hit = { painted: paths[i].isPointInStroke(pt), at: m[1] + ',' + m[2],
+                            width: getComputedStyle(paths[i]).strokeWidth,
+                            cap: getComputedStyle(paths[i]).strokeLinecap };
+                    break;
+                }
+            }
+            document.body.removeChild(host);
+            return JSON.stringify({ total: paths.length, hit: hit });
+        })()`);
+        const deg = JSON.parse(degenerate);
+        r.check('individual scale lengths produce zero-length frets', !!(deg.hit), degenerate);
+        if (deg.hit) {
+            r.check('and the renderer still paints them', deg.hit.painted === true, degenerate);
+            r.check('because they keep a round cap', deg.hit.cap === 'round', deg.hit.cap);
+            r.check('at four times the hairline so they stay findable',
+                Math.abs(asUserUnits(deg.hit.width) - 1.411112) < 1e-4, deg.hit.width);
+        }
+
         // --------------------------------------------------------------- layout
         //
         // The reported complaint: at some widths the results table landed tucked

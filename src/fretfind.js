@@ -720,13 +720,37 @@ var ff = (function(){
         //output right if that ever stops holding.
         var output = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="'+x.minx+' '+x.miny+' '+x.width+' '+x.height+
                         '" height="'+x.height+guitar.units+'" width="'+x.width+guitar.units+'" >\n'];
+        //Line weights are absolute, in the guitar's own units, because this file gets
+        //printed at 1:1 and traced onto wood. They used to be percentages, which a
+        //viewport resolves against its normalized diagonal, so the thickness grew with
+        //the size of the instrument: 0.2% came out at 0.9019mm on a 635mm design --
+        //wider than the fret slot it stands for -- and two boards of different scales
+        //printed with different line weights.
+        //
+        //1/72in is the same hairline getPDF and getPDFMultipage already use, so the
+        //two printable outputs now agree. convertLength owns the unit math; rounding
+        //to six places is what keeps 1/72 from filling the stylesheet with 18 digits.
+        //
+        //The number MUST stay unitless. The viewBox is numerically identical to the
+        //declared physical width/height, so one user unit is one guitar unit -- but
+        //css would resolve a '0.352778mm' against 1px = 1 user unit, i.e. 3.7795 user
+        //units to the millimetre, and draw the line 3.78 times too thick.
+        var hairline = roundFloat(convertLength(1/72, 'in', guitar.units), 6);
+        //ifret frets are zero-length segments (see doPartials in fretGuitar), and a
+        //zero-length subpath paints nothing at all unless the cap is round or square,
+        //so that linecap is load-bearing here and must not be "tidied" away. Four
+        //times the hairline keeps those marks findable on a printout, which is the
+        //same 4:1 the percentages had. pfret carries no linecap on purpose: a round
+        //one overhangs each end by half the stroke, making every fret draw longer
+        //than it is.
+        var dot = roundFloat(hairline * 4, 6);
         output.push('<defs><style type="text/css"><![CDATA[\n'+
-                    '\t.string{stroke:rgb(0,0,0);stroke-width:0.2%;}\n'+
-                    '\t.meta{stroke:rgb(221,221,221);stroke-width:0.2%;}\n'+
-                    '\t.edge{stroke:rgb(0,0,255);stroke-width:0.2%;}\n'+
-                    '\t.pfret{stroke:rgb(255,0,0);stroke-linecap:round;stroke-width:0.2%;}\n'+
-                    '\t.ifret{stroke:rgb(255,0,0);stroke-linecap:round;stroke-width:0.8%;}\n'+
-                    '\t.bbox{stroke:rgb(0,0,0);stroke-width:0.2%;fill:rgba(0,0,0,0)}\n'+
+                    '\t.string{stroke:rgb(0,0,0);stroke-width:'+hairline+';}\n'+
+                    '\t.meta{stroke:rgb(221,221,221);stroke-width:'+hairline+';}\n'+
+                    '\t.edge{stroke:rgb(0,0,255);stroke-width:'+hairline+';}\n'+
+                    '\t.pfret{stroke:rgb(255,0,0);stroke-width:'+hairline+';}\n'+
+                    '\t.ifret{stroke:rgb(255,0,0);stroke-linecap:round;stroke-width:'+dot+';}\n'+
+                    '\t.bbox{stroke:rgb(0,0,0);stroke-width:'+hairline+';fill:rgba(0,0,0,0)}\n'+
                     ']'+']></style></defs>\n');
         //Output SVG line elements for each string.
 

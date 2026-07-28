@@ -154,6 +154,73 @@ for (const [unit, insunits, measurement] of [['in', 1, 0], ['cm', 5, 1], ['mm', 
     r.check('viewBox width/height match the drawing', box[2] > 0 && box[3] > 0 && Math.abs(box[3] - 635) < 1, box.join(' '));
 }
 
+// ------------------------------------------------------------ SVG line weight
+//
+// The file is printed at 1:1 and traced onto wood, so the lines have to be an
+// absolute weight in the guitar's own units. They used to be percentages, which
+// resolve against the viewport's normalized diagonal, so a bigger instrument got
+// thicker lines: 0.2% measured 0.9019mm on the 635mm design, wider than the fret
+// slot it stands for.
+
+{
+    const widths = svg => [...svg.matchAll(/stroke-width:([^;}]+)/g)].map(m => m[1]);
+    // 1/72in, the hairline the PDF writers already use, expressed in each unit
+    const expected = { in: '0.013889', cm: '0.035278', mm: '0.352778' };
+    const design = {
+        in: { scaleLength: 25, nutWidth: 1.375, bridgeWidth: 2.125, overhang: 0.09375 },
+        cm: { scaleLength: 63.5, nutWidth: 3.4925, bridgeWidth: 5.3975, overhang: 0.238125 },
+        mm: { scaleLength: 635, nutWidth: 34.925, bridgeWidth: 53.975, overhang: 2.38125 },
+    };
+
+    for (const unit of ['in', 'cm', 'mm']) {
+        const g = ff.fretGuitar(buildGuitar(ff, Object.assign({ units: unit }, design[unit])));
+        const svg = ff.getSVG(g, DISPLAY_OPTIONS);
+        const w = widths(svg);
+
+        // a percentage is the bug; a css unit suffix is the other way to get it
+        // wrong, because css would resolve 'mm' against 1px = 1 user unit and draw
+        // the line 3.78x too thick. only a bare number is correct here.
+        r.check(`${unit}: no stroke width is a percentage`, w.length > 0 && w.every(s => s.indexOf('%') === -1), w.join(' '));
+        r.check(`${unit}: every stroke width is a bare number`, w.every(s => /^[0-9.]+$/.test(s)), w.join(' '));
+        r.check(`${unit}: the hairline is 1/72in = ${expected[unit]}`,
+            svg.indexOf(`.pfret{stroke:rgb(255,0,0);stroke-width:${expected[unit]};}`) > -1,
+            w.join(' '));
+
+        // a fret drawn with round caps overhangs each end by half the stroke, so
+        // every fret prints longer than it is
+        r.check(`${unit}: pfret has no linecap, so frets are their true length`,
+            /\.pfret\{[^}]*\}/.exec(svg)[0].indexOf('linecap') === -1,
+            /\.pfret\{[^}]*\}/.exec(svg)[0]);
+
+        // load-bearing, not decoration: with doPartials false every fret is a
+        // zero-length segment, and a zero-length subpath paints nothing at all
+        // unless the cap is round or square
+        r.check(`${unit}: ifret keeps its round linecap or its frets vanish`,
+            /\.ifret\{[^}]*\}/.exec(svg)[0].indexOf('stroke-linecap:round') > -1,
+            /\.ifret\{[^}]*\}/.exec(svg)[0]);
+    }
+
+    // the actual defect: the old percentages made line weight a function of how
+    // big the instrument was, so two boards from the same tool printed differently
+    const small = ff.getSVG(ff.fretGuitar(buildGuitar(ff, { units: 'mm', scaleLength: 300, nutWidth: 34.925, bridgeWidth: 53.975, overhang: 2.38125 })), DISPLAY_OPTIONS);
+    const large = ff.getSVG(ff.fretGuitar(buildGuitar(ff, { units: 'mm', scaleLength: 900, nutWidth: 34.925, bridgeWidth: 53.975, overhang: 2.38125 })), DISPLAY_OPTIONS);
+    r.check('line weight does not depend on the size of the design',
+        widths(small).join(' ') === widths(large).join(' '),
+        widths(small)[0] + ' vs ' + widths(large)[0]);
+}
+
+// and the degenerate frets really are zero-length, which is why that linecap stays
+{
+    const g = buildGuitar(ff, { units: 'mm', scaleLength: 635, nutWidth: 34.925, bridgeWidth: 53.975, overhang: 2.38125 });
+    g.strings[2] = new ff.Segment(new ff.Point(g.strings[2].end1.x, 17), g.strings[2].end2.copy());
+    const svg = ff.getSVG(ff.fretGuitar(g), DISPLAY_OPTIONS);
+    const paths = [...svg.matchAll(/<path d="M([-\d.eE+]+) ([-\d.eE+]+)L([-\d.eE+]+) ([-\d.eE+]+)" class="ifret"/g)];
+    r.check('individual scale lengths emit ifret paths', paths.length > 0, paths.length);
+    r.check('and those frets are zero-length points',
+        paths.some(m => m[1] === m[3] && m[2] === m[4]),
+        paths.length ? paths[0].slice(1).join(',') : 'none');
+}
+
 // ------------------------------------------------------- byte-for-byte hashes
 
 const actual = {};
